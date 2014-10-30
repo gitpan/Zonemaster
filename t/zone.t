@@ -9,7 +9,7 @@ my $datafile = 't/zone.data';
 if ( not $ENV{ZONEMASTER_RECORD} ) {
     die "Stored data file missing" if not -r $datafile;
     Zonemaster::Nameserver->restore( $datafile );
-    Zonemaster->config->get->{no_network} = 1;
+    Zonemaster->config->no_network( 1 );
 }
 
 BEGIN { use_ok( 'Zonemaster::Zone' ) }
@@ -22,10 +22,15 @@ is( $zone->parent->name, 'se' );
 my $root = new_ok( 'Zonemaster::Zone' => [ { name => '.' } ] );
 is( $root->parent, $root );
 
+isa_ok($zone->glue_names, 'ARRAY');
+is_deeply($zone->glue_names, [qw(i.ns.se ns.nic.se ns3.nic.se)]);
+
 isa_ok( $zone->glue, 'ARRAY' );
 ok( @{ $zone->glue } > 0, 'glue list not empty' );
 isa_ok( $_, 'Zonemaster::Nameserver' ) for @{ $zone->glue };
 
+isa_ok( $zone->ns_names, 'ARRAY');
+is_deeply($zone->ns_names, [qw(i.ns.se ns.nic.se ns3.nic.se)]);
 isa_ok( $zone->ns, 'ARRAY' );
 ok( @{ $zone->ns } > 0, 'NS list not empty' );
 isa_ok( $_, 'Zonemaster::Nameserver' ) for @{ $zone->ns };
@@ -36,6 +41,18 @@ isa_ok( $_, 'Net::LDNS::RR' ) for @{ $zone->glue_addresses };
 my $p = $zone->query_one( 'www.iis.se', 'A' );
 isa_ok( $p, 'Zonemaster::Packet' );
 my @rrs = $p->get_records( 'a', 'answer' );
+is( scalar( @rrs ), 1, 'one answer A RR' );
+is( $rrs[0]->address, '91.226.36.46', 'expected address' );
+
+$p = $zone->query_persistent( 'www.iis.se', 'A' );
+isa_ok( $p, 'Zonemaster::Packet' );
+@rrs = $p->get_records( 'a', 'answer' );
+is( scalar( @rrs ), 1, 'one answer A RR' );
+is( $rrs[0]->address, '91.226.36.46', 'expected address' );
+
+$p = $zone->query_auth( 'www.iis.se', 'A' );
+isa_ok( $p, 'Zonemaster::Packet' );
+@rrs = $p->get_records( 'a', 'answer' );
 is( scalar( @rrs ), 1, 'one answer A RR' );
 is( $rrs[0]->address, '91.226.36.46', 'expected address' );
 

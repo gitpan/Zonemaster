@@ -1,4 +1,4 @@
-package Zonemaster v0.0.2;
+package Zonemaster v0.0.7;
 
 use 5.014002;
 use Moose;
@@ -9,6 +9,7 @@ use Zonemaster::Config;
 use Zonemaster::Zone;
 use Zonemaster::Test;
 use Zonemaster::Recursor;
+use Zonemaster::ASNLookup;
 
 our $logger;
 our $config;
@@ -19,7 +20,11 @@ sub logger {
 }
 
 sub config {
-    return $config //= Zonemaster::Config->new;
+    if (not defined $config) {
+        $config = Zonemaster::Config->new;
+    }
+    
+    return $config;
 }
 
 sub ns {
@@ -56,11 +61,11 @@ sub all_tags {
     my ( $class ) = @_;
     my @res;
 
-    foreach my $module ( 'Basic', Zonemaster::Test->modules ) {
+    foreach my $module ( 'Basic', sort {$a cmp $b} Zonemaster::Test->modules ) {
         my $full = "Zonemaster::Test::$module";
         my $ref  = $full->metadata;
         foreach my $list ( values %$ref ) {
-            push @res, map { uc( $module ) . ':' . $_ } @$list;
+            push @res, map { uc( $module ) . ':' . $_ } sort {$a cmp $b} @$list;
         }
     }
 
@@ -74,7 +79,7 @@ sub all_methods {
     foreach my $module ( 'Basic', Zonemaster::Test->modules ) {
         my $full = "Zonemaster::Test::$module";
         my $ref  = $full->metadata;
-        foreach my $method ( keys %$ref ) {
+        foreach my $method ( sort {$a cmp $b} keys %$ref ) {
             push @{ $res{$module} }, $method;
         }
     }
@@ -104,7 +109,11 @@ sub add_fake_delegation {
 sub add_fake_ds {
     my ( $class, $domain, $aref ) = @_;
 
-    my $parent = $class->zone( $recursor->parent( $domain ) );
+    my $parent = $class->zone( scalar($recursor->parent( $domain )) );
+    if (not $parent) {
+        die "Failed to find parent for $domain";
+    }
+
     foreach my $ns ( @{ $parent->ns } ) {
         $ns->add_fake_ds( $domain => $aref );
     }
@@ -122,6 +131,29 @@ sub preload_cache {
     my ( $class, $filename ) = @_;
 
     return Zonemaster::Nameserver->restore( $filename );
+}
+
+sub asn_lookup {
+    my ( undef, $ip ) = @_;
+
+    return Zonemaster::ASNLookup->get($ip);
+}
+
+sub modules {
+    return Zonemaster::Test->modules;
+}
+
+sub start_time_now {
+    Zonemaster::Logger->start_time_now();
+}
+
+sub reset {
+    Zonemaster::Logger->start_time_now();
+    Zonemaster::Nameserver->empty_cache();
+    $logger->clear_history();
+    Zonemaster::Recursor->clear_cache();
+
+    return;
 }
 
 =head1 NAME
@@ -188,6 +220,30 @@ After running the tests, save the accumulated cache to a file with the given nam
 Before running the tests, load the cache with information from a file with the given name. This file must have the same format as is produced by
 L<save_cache()>.
 
+=item asn_lookup($ip)
+
+Takes a single IP address and returns one of three things:
+
+=over
+
+=item
+
+Nothing, if the IP address is not in any AS.
+
+=item
+
+If called in list context, a list of AS number and a L<Net::IP::XS> object representing the prefix it's in.
+
+=item
+
+If called in scalar context, only the AS number.
+
+=back
+
+=item modules()
+
+Returns a list of the loaded test modules. Exactly the same as L<Zonemaster::Test::modules>.
+
 =item add_fake_delegation($domain, $data)
 
 This method adds some fake delegation information to the system. The arguments are a domain name, and a reference to a hash with delegation
@@ -220,6 +276,15 @@ Example:
       ]
    );
 
+=item start_time_now()
+
+Set the logger's start time to the current time.
+
+=item reset()
+
+Reset logger start time to current time, empty the list of log messages, clear
+nameserver object cache and recursor cache.
+
 =back
 
 =head1 AUTHOR
@@ -227,5 +292,8 @@ Example:
 Calle Dybedahl, C<< <calle at init.se> >>
 
 =cut
+
+no Moose;
+__PACKAGE__->meta->make_immutable;
 
 1;

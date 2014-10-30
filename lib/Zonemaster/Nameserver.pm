@@ -1,4 +1,4 @@
-package Zonemaster::Nameserver v0.0.1;
+package Zonemaster::Nameserver v0.0.2;
 
 use 5.14.2;
 use Moose;
@@ -12,7 +12,7 @@ use Zonemaster::Recursor;
 
 use Net::LDNS;
 
-use Net::IP qw(:PROC);
+use Net::IP::XS qw(:PROC);
 use Time::HiRes qw[time];
 use JSON::XS;
 use MIME::Base64;
@@ -24,11 +24,11 @@ use overload
   '""'  => \&string,
   'cmp' => \&compare;
 
-subtype 'Zonemaster::Net::IP', as 'Object', where { $_->isa( 'Net::IP' ) };
-coerce 'Zonemaster::Net::IP', from 'Str', via { Net::IP->new( $_ ) };
+subtype 'Zonemaster::Net::IP::XS', as 'Object', where { $_->isa( 'Net::IP::XS' ) };
+coerce 'Zonemaster::Net::IP::XS', from 'Str', via { Net::IP::XS->new( $_ ) };
 
 has 'name'    => ( is => 'ro', isa => 'Zonemaster::DNSName', coerce => 1, required => 0 );
-has 'address' => ( is => 'ro', isa => 'Zonemaster::Net::IP', coerce => 1, required => 1 );
+has 'address' => ( is => 'ro', isa => 'Zonemaster::Net::IP::XS', coerce => 1, required => 1 );
 
 has 'dns'   => ( is => 'ro', isa => 'Net::LDNS',                     lazy_build => 1 );
 has 'cache' => ( is => 'ro', isa => 'Zonemaster::Nameserver::Cache', lazy_build => 1 );
@@ -60,7 +60,6 @@ around 'new' => sub {
         $object_cache{$name}{ $obj->address->ip } = $obj;
     }
 
-    Zonemaster->logger->add( NS_FETCHED => { name => $name, ip => $obj->address->ip } );
     return $object_cache{$name}{ $obj->address->ip };
 };
 
@@ -70,7 +69,7 @@ sub _build_dns {
     my $res = Net::LDNS->new( $self->address->ip );
     $res->recurse( 0 );
 
-    my %defaults = %{ Zonemaster->config->get->{resolver}{defaults} };
+    my %defaults = %{ Zonemaster->config->resolver_defaults };
     foreach my $flag ( keys %defaults ) {
         $res->$flag( $defaults{$flag} );
     }
@@ -92,12 +91,12 @@ sub query {
     my ( $self, $name, $type, $href ) = @_;
     $type //= 'A';
 
-    if ( $self->address->version == 4 and not Zonemaster->config->get->{net}{ipv4} ) {
+    if ( $self->address->version == 4 and not Zonemaster->config->ipv4_ok ) {
         Zonemaster->logger->add( IPV4_BLOCKED => { ns => $self->string } );
         return;
     }
 
-    if ( $self->address->version == 6 and not Zonemaster->config->get->{net}{ipv6} ) {
+    if ( $self->address->version == 6 and not Zonemaster->config->ipv6_ok ) {
         Zonemaster->logger->add( IPV6_BLOCKED => { ns => $self->string } );
         return;
     }
@@ -112,12 +111,13 @@ sub query {
         }
     );
 
-    my %defaults = %{ Zonemaster->config->get->{resolver}{defaults} };
+    my %defaults = %{ Zonemaster->config->resolver_defaults };
 
-    my $class   = $href->{class}   // 'IN';
-    my $dnssec  = $href->{dnssec}  // $defaults{dnssec};
-    my $usevc   = $href->{usevc}   // $defaults{usevc};
-    my $recurse = $href->{recurse} // $defaults{recurse};
+    my $class     = $href->{class}     // 'IN';
+    my $dnssec    = $href->{dnssec}    // $defaults{dnssec};
+    my $usevc     = $href->{usevc}     // $defaults{usevc};
+    my $recurse   = $href->{recurse}   // $defaults{recurse};
+    my $edns_size = $href->{edns_size} // $defaults{edns_size};
 
     # Fake a DS answer
     if ( $type eq 'DS' and $class eq 'IN' and $self->fake_ds->{ lc( $name ) } ) {
@@ -125,7 +125,7 @@ sub query {
         $p->aa( 0 );
         $p->do( $dnssec );
         $p->rd( $recurse );
-        foreach my $rr ( @{ $self->fake_ds->{$name} } ) {
+        foreach my $rr ( @{ $self->fake_ds->{lc($name)} } ) {
             $p->unique_push( 'answer', $rr );
         }
         my $res = Zonemaster::Packet->new( { packet => $p } );
@@ -134,18 +134,28 @@ sub query {
     }
 
     # Fake a delegation
-    foreach my $fname ( keys %{ $self->fake_delegations } ) {
+    foreach my $fname ( sort keys %{ $self->fake_delegations } ) {
         if ( $name =~ m/(\.|^)\Q$fname\E$/i ) {
             my $p = Net::LDNS::Packet->new( $name, $type, $class );
-            while ( my ( $section, $aref ) = each %{ $self->fake_delegations->{$fname} } ) {
-                $p->unique_push( $section, $_ ) for @$aref;
+
+            if (lc($name) eq lc($fname) and $type eq 'NS') {
+                my $name = $self->fake_delegations->{$fname}{authority};
+                my $addr = $self->fake_delegations->{$fname}{additional};
+                $p->unique_push('answer', $_) for @$name;
+                $p->unique_push('additional', $_) for @$addr;
             }
-            ## Need to fix Net::LDNS so these can be set
+            else {
+                while ( my ( $section, $aref ) = each %{ $self->fake_delegations->{$fname} } ) {
+                    $p->unique_push( $section, $_ ) for @$aref;
+                }
+            }
+
             $p->aa( 0 );
             $p->do( $dnssec );
             $p->rd( $recurse );
+            $p->answerfrom($self->address->ip);
             Zonemaster->logger->add(
-                'fake_delegation',
+                'FAKE_DELEGATION',
                 {
                     name  => "$name",
                     type  => $type,
@@ -160,12 +170,12 @@ sub query {
         } ## end if ( $name =~ m/(\.|^)\Q$fname\E$/i)
     } ## end foreach my $fname ( keys %{...})
 
-    if ( not exists( $self->cache->data->{"\U$name"}{"\U$type"}{"\U$class"}{$dnssec}{$usevc}{$recurse} ) ) {
-        $self->cache->data->{"\U$name"}{"\U$type"}{"\U$class"}{$dnssec}{$usevc}{$recurse} =
+    if ( not exists( $self->cache->data->{"\U$name"}{"\U$type"}{"\U$class"}{$dnssec}{$usevc}{$recurse}{$edns_size} ) ) {
+        $self->cache->data->{"\U$name"}{"\U$type"}{"\U$class"}{$dnssec}{$usevc}{$recurse}{$edns_size} =
           $self->_query( $name, $type, $href );
     }
 
-    my $p = $self->cache->data->{"\U$name"}{"\U$type"}{"\U$class"}{$dnssec}{$usevc}{$recurse};
+    my $p = $self->cache->data->{"\U$name"}{"\U$type"}{"\U$class"}{$dnssec}{$usevc}{$recurse}{$edns_size};
     Zonemaster->logger->add( CACHED_RETURN => { packet => ( $p ? $p->string : 'undef' ) } );
 
     return $p;
@@ -175,16 +185,22 @@ sub add_fake_delegation {
     my ( $self, $domain, $href ) = @_;
     my %delegation;
 
-    Zonemaster->logger->add( FAKE_DELEGATION => { domain => $domain, data => $href } );
+    $domain = ''.Zonemaster::DNSName->new($domain);
     foreach my $name ( keys %$href ) {
         push @{ $delegation{authority} }, Net::LDNS::RR->new( sprintf( '%s IN NS %s', $domain, $name ) );
         foreach my $ip ( @{ $href->{$name} } ) {
+            if (Net::IP::XS->new($ip)->ip eq $self->address->ip) {
+                Zonemaster->logger->add( FAKE_DELEGATION_TO_SELF => { ns => "$self", domain => $domain, data => $href } );
+                return;
+            }
+
             push @{ $delegation{additional} },
               Net::LDNS::RR->new( sprintf( '%s IN %s %s', $name, ( ip_is_ipv6( $ip ) ? 'AAAA' : 'A' ), $ip ) );
         }
     }
 
     $self->fake_delegations->{$domain} = \%delegation;
+    Zonemaster->logger->add( ADDED_FAKE_DELEGATION => { ns => "$self", domain => $domain, data => $href } );
 
     # We're changing the world, so the cache can't be trusted
     Zonemaster::Recursor->clear_cache;
@@ -226,7 +242,7 @@ sub _query {
     $type //= 'A';
     $href->{class} //= 'IN';
 
-    if ( Zonemaster->config->get->{no_network} ) {
+    if ( Zonemaster->config->no_network ) {
         croak sprintf
           "External query for %s, %s attempted to %s while running with no_network",
           $name, $type, $self->string;
@@ -242,7 +258,7 @@ sub _query {
         }
     );
 
-    my %defaults = %{ Zonemaster->config->get->{resolver}{defaults} };
+    my %defaults = %{ Zonemaster->config->resolver_defaults };
 
     # Make sure we have a value for each flag
     foreach my $flag ( keys %defaults ) {
@@ -341,7 +357,7 @@ sub restore {
             {
                 name    => $name,
                 address => $addr,
-                cache   => Zonemaster::Nameserver::Cache->new( { data => $ref, address => Net::IP->new( $addr ) } )
+                cache   => Zonemaster::Nameserver::Cache->new( { data => $ref, address => Net::IP::XS->new( $addr ) } )
             }
         );
     }
@@ -416,24 +432,33 @@ sub axfr {
     my ( $self, $domain, $callback, $class ) = @_;
     $class //= 'IN';
 
-    if ( Zonemaster->config->get->{no_network} ) {
+    if ( Zonemaster->config->no_network ) {
         croak sprintf
           "External AXFR query for %s attempted to %s while running with no_network",
           $domain, $self->string;
     }
 
-    if ( $self->address->version == 4 and not Zonemaster->config->get->{net}{ipv4} ) {
+    if ( $self->address->version == 4 and not Zonemaster->config->ipv4_ok ) {
         Zonemaster->logger->add( IPV4_BLOCKED => { ns => $self->string } );
         return;
     }
 
-    if ( $self->address->version == 6 and not Zonemaster->config->get->{net}{ipv6} ) {
+    if ( $self->address->version == 6 and not Zonemaster->config->ipv6_ok ) {
         Zonemaster->logger->add( IPV6_BLOCKED => { ns => $self->string } );
         return;
     }
 
     return $self->dns->axfr( $domain, $callback, $class );
 }
+
+sub empty_cache {
+    %object_cache = ();
+
+    return;
+}
+
+no Moose;
+__PACKAGE__->meta->make_immutable(inline_constructor => 0);
 
 1;
 
@@ -456,7 +481,7 @@ A L<Zonemaster::DNSName> object holding the nameserver's name.
 
 =item address
 
-A L<Net::IP> object holding the nameserver's address.
+A L<Net::IP::XS> object holding the nameserver's address.
 
 =item dns
 
@@ -590,6 +615,10 @@ function will be called once for each received RR, with that RR as its only
 argument. To continue getting more RRs, the callback must return a true value.
 If it returns a true value, the AXFR will be aborted. See L<Net::LDNS::axfr>
 for more details.
+
+=item empty_cache()
+
+Remove all entries from the object cache.
 
 =back
 

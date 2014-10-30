@@ -1,4 +1,4 @@
-package Zonemaster::Logger v0.0.1;
+package Zonemaster::Logger v0.0.2;
 
 use 5.14.2;
 use Moose;
@@ -7,6 +7,7 @@ use Zonemaster::Logger::Entry;
 use Zonemaster;
 use List::MoreUtils qw[none];
 use Scalar::Util qw[blessed];
+use JSON::XS;
 
 has 'entries' => (
     is      => 'ro',
@@ -42,7 +43,7 @@ sub add {
 
 sub _check_filter {
     my ( $self, $entry ) = @_;
-    my $config = Zonemaster->config->get->{logfilter};
+    my $config = Zonemaster->config->logfilter;
 
     if ( $config ) {
         if ( $config->{ $entry->module } ) {
@@ -51,11 +52,13 @@ sub _check_filter {
                     my $cond = $rule->{when}{$key};
                     if ( ref( $cond ) and ref( $cond ) eq 'ARRAY' ) {
                         # No match in list, so overall fail, so return
+                        ## no critic (TestingAndDebugging::ProhibitNoWarnings)
                         no warnings 'uninitialized';
                         return if none { $_ eq $entry->args->{$key} } @$cond;
                     }
                     else {
                         # No match, so overall fail, so return
+                        ## no critic (TestingAndDebugging::ProhibitNoWarnings)
                         no warnings 'uninitialized';
                         return if $cond ne $entry->args->{$key};
                     }
@@ -66,6 +69,49 @@ sub _check_filter {
         }
     } ## end if ( $config )
 } ## end sub _check_filter
+
+sub start_time_now {
+    Zonemaster::Logger::Entry->start_time_now();
+}
+
+sub clear_history {
+    my ($self) = @_;
+
+    my $r = $self->entries;
+    splice @$r,0,scalar(@$r);
+
+    return;
+}
+
+sub json {
+    my ($self, $min_level) = @_;
+    my $json = JSON::XS->new->allow_blessed->convert_blessed->canonical;
+    my %numeric = Zonemaster::Logger::Entry->levels();
+
+    my @msg = @{$self->entries};
+
+    if ($min_level and defined $numeric{uc($min_level)} ) {
+        @msg = grep {$_->numeric_level >= $numeric{uc($min_level)}} @msg;
+    }
+
+    my @out;
+    foreach my $m (@msg) {
+        my %r;
+        $r{timestamp} = $m->timestamp;
+        $r{module} = $m->module;
+        $r{tag} = $m->tag;
+        $r{level} = $m->level;
+        $r{args} = $m->args if $m->args;
+
+        push @out, \%r;
+    }
+
+    return $json->encode(\@out);
+}
+
+
+no Moose;
+__PACKAGE__->meta->make_immutable;
 
 1;
 
@@ -110,6 +156,26 @@ test run that logged the message.
 =item add($tag, $argref)
 
 Adds an entry with the given tag and arguments to the logger object.
+
+=item json([$level])
+
+Returns a JSON-formatted string with all the stored log entries. If an argument
+is given and is a known severity level, only messages with at least that level
+will be included.
+
+=back
+
+=head1 CLASS METHOD
+
+=over
+
+=item start_time_now()
+
+Set the logger's start time to the current time.
+
+=item clear_history()
+
+Remove all known log entries.
 
 =back
 

@@ -14,7 +14,11 @@ isa_ok( $log, 'Zonemaster::Logger' );
 
 $log->add( 'TAG', { seventeen => 17 } );
 
-my $e = $log->entries->[0];
+# Make sure all our policy comes from our config file.
+$Zonemaster::Config::policy = {};
+Zonemaster->config->load_policy_file('t/policy.json');
+
+my $e = $log->entries->[-1];
 isa_ok( $e, 'Zonemaster::Logger::Entry' );
 is( $e->module, 'SYSTEM', 'module ok' );
 is( $e->tag,    'TAG',    'tag ok' );
@@ -23,14 +27,14 @@ is_deeply( $e->args, { seventeen => 17 }, 'args ok' );
 my $entry = info( 'TEST', { an => 'argument' } );
 isa_ok( $entry, 'Zonemaster::Logger::Entry' );
 
-is( scalar( @{ Zonemaster->logger->entries } ), 2, 'expected number of entries' );
+ok( scalar( @{ Zonemaster->logger->entries } ) >= 2, 'expected number of entries' );
 
 like( "$entry", qr/SYSTEM:TEST an=argument/, 'stringification overload' );
 
 is( $entry->level, 'DEBUG', 'right level' );
 my $example = Zonemaster::Logger::Entry->new( { module => 'BASIC', tag => 'NS_FAILED' } );
-is( $example->level,         'WARNING', 'expected level' );
-is( $example->numeric_level, 3,         'expected numeric level' );
+is( $example->level,         'ERROR', 'expected level' );
+is( $example->numeric_level, 4,         'expected numeric level' );
 
 my $canary = 0;
 $log->callback(
@@ -76,6 +80,17 @@ is( $also_filtered->level, 'INFO',  'Filtered level' );
 my %levels = Zonemaster::Logger::Entry->levels;
 is( $levels{CRITICAL}, 5, 'CRITICAL is level 5' );
 is( $levels{INFO},     1, 'INFO is level 1' );
+
+ok( @{ $log->entries } > 0, 'There are log entries' );
+my $all_json  = $log->json;
+my $some_json = $log->json( 'ERROR' );
+ok( length( $all_json ) > length( $some_json ), 'All longer than some' );
+
+like(
+    $some_json,
+qr[[{"args":{"exception":"in callback at t/logger.t line 47, <DATA> line 1.\n"},"level":"ERROR","module":"SYSTEM","tag":"LOGGER_CALLBACK_ERROR","timestamp":0.\d+}]],
+    'JSON looks OK'
+);
 
 Zonemaster->config->policy->{BASIC}{NS_FAILED} = 'GURKSALLAD';
 my $fail = Zonemaster::Logger::Entry->new( { module => 'BASIC', tag => 'NS_FAILED' } );

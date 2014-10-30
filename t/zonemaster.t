@@ -13,7 +13,7 @@ my $datafile = q{t/zonemaster.data};
 if ( not $ENV{ZONEMASTER_RECORD} ) {
     die q{Stored data file missing} if not -r $datafile;
     Zonemaster::Nameserver->restore( $datafile );
-    Zonemaster->config->get->{no_network} = 1;
+    Zonemaster->config->no_network( 1 );
 }
 
 isa_ok( Zonemaster->logger, 'Zonemaster::Logger' );
@@ -32,10 +32,15 @@ ok( exists( $methods{Basic} ), 'all_methods' );
 my @tags = Zonemaster->all_tags;
 ok( ( grep { /BASIC:HAS_NAMESERVERS/ } @tags ), 'all_tags' );
 
+my $disabled = 0;
 %module = ();
 Zonemaster->logger->callback(
     sub {
         my ( $e ) = shift;
+
+        if ( $e->tag eq 'POLICY_DISABLED' and $e->args->{name} eq 'Example') {
+            $disabled = 1;
+        }
 
         if ( $e->tag eq 'MODULE_VERSION' ) {
             $module{ $e->args->{module} } = $e->args->{version};
@@ -53,6 +58,8 @@ ok( $module{'Zonemaster::Test::Delegation'},   'Zonemaster::Test::Delegation did
 ok( $module{'Zonemaster::Test::Nameserver'},   'Zonemaster::Test::Nameserver did run.' );
 ok( $module{'Zonemaster::Test::Syntax'},       'Zonemaster::Test::Syntax did run.' );
 ok( $module{'Zonemaster::Test::Zone'},         'Zonemaster::Test::Zone did run.' );
+
+ok( $disabled, 'Blocking of disabled module was logged.' );
 
 my $filename = tmpnam();
 Zonemaster->save_cache( $filename );
@@ -85,9 +92,32 @@ Zonemaster->logger->callback(
 isa_ok( exception { Zonemaster->test_zone( 'nic.se' ) }, 'Zonemaster::Exception' );
 isa_ok( exception { Zonemaster->test_module( 'SyNtAx', 'nic.se' ) }, 'Zonemaster::Exception' );
 isa_ok( exception { Zonemaster->test_method( 'Syntax', 'syntax01', 'nic.se' ) }, 'Zonemaster::Exception' );
+Zonemaster->logger->clear_callback;
+
+Zonemaster->config->ipv4_ok(0);
+Zonemaster->config->ipv6_ok(0);
+my ($msg) = Zonemaster->test_zone('nic.se');
+ok(!!$msg, 'Got a message.');
+is($msg->tag, 'NO_NETWORK', 'It is the right message.');
+
+($msg) = Zonemaster->test_module('Basic', 'nic.se');
+ok(!!$msg, 'Got a message.');
+is($msg->tag, 'NO_NETWORK', 'It is the right message.');
+
+($msg) = Zonemaster->test_method('Basic', 'basic01', 'nic.se');
+ok(!!$msg, 'Got a message.');
+is($msg->tag, 'NO_NETWORK', 'It is the right message.');
+Zonemaster->config->ipv4_ok(1);
+Zonemaster->config->ipv6_ok(1);
 
 if ( $ENV{ZONEMASTER_RECORD} ) {
     Zonemaster::Nameserver->save( $datafile );
 }
+
+ok( @{ Zonemaster->logger->entries } > 0,                        'There are log entries' );
+ok( scalar( keys( %Zonemaster::Nameserver::object_cache ) ) > 0, 'There are things in the object cache' );
+Zonemaster->reset;
+ok( @{ Zonemaster->logger->entries } == 0,                        'There are no log entries' );
+ok( scalar( keys( %Zonemaster::Nameserver::object_cache ) ) == 0, 'The object cache is empty' );
 
 done_testing;

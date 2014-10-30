@@ -13,7 +13,7 @@ my $datafile = 't/recursor.data';
 if ( not $ENV{ZONEMASTER_RECORD} ) {
     die "Stored data file missing" if not -r $datafile;
     Zonemaster::Nameserver->restore( $datafile );
-    config->{no_network} = 1;
+    Zonemaster->config->no_network( 1 );
 }
 
 my $p = Zonemaster::Recursor->recurse( 'www.iis.se' );
@@ -33,6 +33,9 @@ is_parent( 'sno.pp.se',                                                         
 is_parent( '2.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.4.9.5.0.7.2.0.0.0.7.4.0.1.0.0.2.ip6.arpa', '0.7.4.0.1.0.0.2.ip6.arpa' );
 is_parent( '.',                                                                        '.' );
 is_parent( 'foo.bar.baz.example.org',                                                  'example.org' );
+is_parent( 'xx--doesnotexist.se',                                                      'se');
+is_parent( 'xx--doesnotexist.com',                                                     'com');
+is_parent( 'pewc.eu',                                                                  'eu');
 
 sub is_parent {
     my ( $name, $pname ) = @_;
@@ -47,7 +50,7 @@ is( $name, 'iis.se', 'name ok' );
 ok( $packet->no_such_record, 'expected packet content' );
 
 my @addr = Zonemaster::Recursor->get_addresses_for( 'ns.nic.se' );
-isa_ok( $_, 'Net::IP' ) for @addr;
+isa_ok( $_, 'Net::IP::XS' ) for @addr;
 is( $addr[0]->short, '212.247.7.228',      'expected address' );
 is( $addr[1]->short, '2a00:801:f0:53::53', 'expected address' );
 

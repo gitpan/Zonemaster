@@ -1,4 +1,4 @@
-package Zonemaster::Test::Delegation v0.0.1;
+package Zonemaster::Test::Delegation v0.0.2;
 
 use 5.14.2;
 use strict;
@@ -7,17 +7,14 @@ use warnings;
 use Zonemaster;
 use Zonemaster::Util;
 use Zonemaster::Test::Address;
+use Zonemaster::Test::Syntax;
+use Zonemaster::TestMethods;
+use Zonemaster::Constants ':all';
 
-use Readonly;
-use Net::IP;
+use Net::IP::XS;
 use List::MoreUtils qw[uniq];
 use Net::LDNS::Packet;
 use Net::LDNS::RR;
-
-Readonly our $MINIMUM_NUMBER_OF_NAMESERVERS => 2;
-Readonly our $UDP_PAYLOAD_LIMIT             => 512;
-Readonly our $IP_VERSION_4                  => $Zonemaster::Test::Address::IP_VERSION_4;
-Readonly our $IP_VERSION_6                  => $Zonemaster::Test::Address::IP_VERSION_6;
 
 ###
 ### Entry points
@@ -52,6 +49,8 @@ sub metadata {
               NOT_ENOUGH_NS_GLUE
               ENOUGH_NS
               NOT_ENOUGH_NS
+              ENOUGH_NS_TOTAL
+              NOT_ENOUGH_NS_TOTAL
               )
         ],
         delegation02 => [
@@ -91,6 +90,31 @@ sub metadata {
     };
 } ## end sub metadata
 
+sub translation {
+    return {
+        "REFERRAL_SIZE_LARGE"    => "The smallest possible legal referral packet is larger than 512 octets (it is {size}).",
+        "EXTRA_NAME_CHILD"       => "Child has nameserver(s) not listed at parent ({extra}).",
+        "REFERRAL_SIZE_OK"       => "The smallest possible legal referral packet is smaller than 513 octets (it is {size}).",
+        "IS_NOT_AUTHORITATIVE"   => "Nameserver {ns} response is not authoritative on {proto} port 53.",
+        "ENOUGH_NS_GLUE"         => "Parent lists enough nameservers ({glue}). Lower limit set to {minimum}.",
+        "NS_RR_IS_CNAME"         => "Nameserver {ns} {address_type} RR point to CNAME.",
+        "SAME_IP_ADDRESS"        => "IP {address} refers to multiple nameservers ({nss}).",
+        "DISTINCT_IP_ADDRESS"    => "All the IP addresses used by the nameservers are unique",
+        "ENOUGH_NS"              => "Child lists enough nameservers ({ns}). Lower limit set to {minimum}.",
+        "NAMES_MATCH"            => "All of the nameserver names are listed both at parent and child.",
+        "TOTAL_NAME_MISMATCH"    => "None of the nameservers listed at the parent are listed at the child.",
+        "SOA_NOT_EXISTS"         => "A SOA query NOERROR response from {ns} was received empty.",
+        "EXTRA_NAME_PARENT"      => "Parent has nameserver(s) not listed at the child ({extra}).",
+        "NOT_ENOUGH_NS_GLUE"     => "Parent does not list enough nameservers ({glue}). Lower limit set to {minimum}.",
+        "NOT_ENOUGH_NS"          => "Child does not list enough nameservers ({ns}). Lower limit set to {minimum}.",
+        "ARE_AUTHORITATIVE"      => "All the nameservers are authoritative.",
+        "NS_RR_NO_CNAME"         => "No nameserver point to CNAME alias.",
+        "SOA_EXISTS"             => "All the nameservers have SOA record.",
+        "ENOUGH_NS_TOTAL"        => "Parent and child list enough nameservers ({ns}). Lower limit set to {minimum}.",
+        "NOT_ENOUGH_NS_TOTAL"    => "Parent and child do not list enough nameservers ({ns}). Lower limit set to {minimum}.",
+    };
+}
+
 sub version {
     return "$Zonemaster::Test::Delegation::VERSION";
 }
@@ -103,12 +127,15 @@ sub delegation01 {
     my ( $class, $zone ) = @_;
     my @results;
 
-    if ( scalar( @{ $zone->glue } ) >= $MINIMUM_NUMBER_OF_NAMESERVERS ) {
+    my @parent_nsnames = map { $_->string } @{ Zonemaster::TestMethods->method2($zone) };
+
+    if ( scalar( @parent_nsnames ) >= $MINIMUM_NUMBER_OF_NAMESERVERS ) {
         push @results,
           info(
             ENOUGH_NS_GLUE => {
-                count => scalar( @{ $zone->glue } ),
-                glue  => join( q{;}, map { $_->string } @{ $zone->glue } ),
+                count   => scalar( @parent_nsnames ),
+                minimum => $MINIMUM_NUMBER_OF_NAMESERVERS,
+                glue    => join( q{;}, @parent_nsnames ),
             }
           );
     }
@@ -116,18 +143,22 @@ sub delegation01 {
         push @results,
           info(
             NOT_ENOUGH_NS_GLUE => {
-                count => scalar( @{ $zone->glue } ),
-                glue  => join( q{;}, map { $_->string } @{ $zone->glue } ),
+                count   => scalar( @parent_nsnames ),
+                minimum => $MINIMUM_NUMBER_OF_NAMESERVERS,
+                glue    => join( q{;}, @parent_nsnames ),
             }
           );
     }
 
-    if ( scalar( @{ $zone->ns } ) >= $MINIMUM_NUMBER_OF_NAMESERVERS ) {
+    my @child_nsnames = map { $_->string } @{ Zonemaster::TestMethods->method3($zone) };
+
+    if ( scalar( @child_nsnames ) >= $MINIMUM_NUMBER_OF_NAMESERVERS ) {
         push @results,
           info(
             ENOUGH_NS => {
-                count => scalar( @{ $zone->ns } ),
-                ns    => join( q{;}, map { $_->string } @{ $zone->ns } ),
+                count   => scalar( @child_nsnames ),
+                minimum => $MINIMUM_NUMBER_OF_NAMESERVERS,
+                ns      => join( q{;}, @child_nsnames ),
             }
           );
     }
@@ -135,8 +166,32 @@ sub delegation01 {
         push @results,
           info(
             NOT_ENOUGH_NS => {
-                count => scalar( @{ $zone->ns } ),
-                ns    => join( q{;}, map { $_->string } @{ $zone->ns } ),
+                count   => scalar( @child_nsnames ),
+                minimum => $MINIMUM_NUMBER_OF_NAMESERVERS,
+                ns      => join( q{;}, @child_nsnames ),
+            }
+          );
+    }
+
+    my @all_nsnames = uniq map { $_->string } @{ Zonemaster::TestMethods->method2($zone) }, @{ Zonemaster::TestMethods->method3($zone) };
+
+    if ( scalar( @all_nsnames ) >= $MINIMUM_NUMBER_OF_NAMESERVERS ) {
+        push @results,
+          info(
+            ENOUGH_NS_TOTAL => {
+                count   => scalar( @all_nsnames ),
+                minimum => $MINIMUM_NUMBER_OF_NAMESERVERS,
+                ns      => join( q{;}, @all_nsnames ),
+            }
+          );
+    }
+    else {
+        push @results,
+          info(
+            NOT_ENOUGH_NS_TOTAL => {
+                count   => scalar( @all_nsnames ),
+                minimum => $MINIMUM_NUMBER_OF_NAMESERVERS,
+                ns      => join( q{;}, @all_nsnames ),
             }
           );
     }
@@ -150,7 +205,7 @@ sub delegation02 {
     my %nsnames_and_ip;
     my %ips;
 
-    foreach my $local_ns ( @{ $zone->glue }, @{ $zone->ns } ) {
+    foreach my $local_ns ( @{ Zonemaster::TestMethods->method4($zone) }, @{ Zonemaster::TestMethods->method5($zone) } ) {
 
         next if $nsnames_and_ip{ $local_ns->name->string . q{/} . $local_ns->address->short };
 
@@ -172,17 +227,32 @@ sub delegation02 {
         }
     }
 
+    if (scalar keys %ips and not scalar @results) {
+        push @results,
+          info(
+            DISTINCT_IP_ADDRESS => { }
+          );
+    }
+
     return @results;
 } ## end sub delegation02
 
 sub delegation03 {
     my ( $class, $zone ) = @_;
     my @results;
+    my %nsnames_and_ip;
 
-    my @nsnames = uniq map { $_->name } @{ $zone->ns };
-    my @needs_glue =
-      sort { length( $a->name->string ) <=> length( $b->name->string ) }
-      grep { $zone->is_in_zone( $_->name ) } @{ $zone->ns };
+    my @nsnames = uniq map { $_->string } @{ Zonemaster::TestMethods->method2($zone) }, @{ Zonemaster::TestMethods->method3($zone) };
+    my @needs_glue;
+
+    foreach my $local_ns ( @{ Zonemaster::TestMethods->method4($zone) }, @{ Zonemaster::TestMethods->method5($zone) } ) {
+        next if $nsnames_and_ip{ $local_ns->name->string . q{/} . $local_ns->address->short };
+        if ($zone->is_in_zone( $local_ns->name ) ) {
+            push @needs_glue, $local_ns;
+        }
+        $nsnames_and_ip{ $local_ns->name->string . q{/} . $local_ns->address->short }++;
+    }
+    @needs_glue = sort { length( $a->name->string ) <=> length( $b->name->string ) } @needs_glue;
     my @needs_v4_glue = grep { $_->address->version == $IP_VERSION_4 } @needs_glue;
     my @needs_v6_glue = grep { $_->address->version == $IP_VERSION_6 } @needs_glue;
     my $long_name     = _max_length_name_for( $zone->name );
@@ -208,10 +278,20 @@ sub delegation03 {
 
     my $size = length( $p->data );
     if ( $size > $UDP_PAYLOAD_LIMIT ) {
-        push @results, info( REFERRAL_SIZE_LARGE => { size => $size } );
+        push @results,
+          info(
+            REFERRAL_SIZE_LARGE => {
+                size => $size,
+            }
+          );
     }
     else {
-        push @results, info( REFERRAL_SIZE_OK => { size => $size } );
+        push @results,
+          info(
+            REFERRAL_SIZE_OK => {
+                size => $size,
+            }
+          );
     }
 
     return @results;
@@ -222,13 +302,17 @@ sub delegation04 {
     my @results;
     my %nsnames;
 
-    foreach my $local_ns ( @{ $zone->glue }, @{ $zone->ns } ) {
+    foreach my $local_ns ( @{ Zonemaster::TestMethods->method4($zone) }, @{ Zonemaster::TestMethods->method5($zone) } ) {
+
+        next if (not Zonemaster->config->ipv6_ok and $local_ns->address->version == $IP_VERSION_6);
+
+        next if (not Zonemaster->config->ipv4_ok and $local_ns->address->version == $IP_VERSION_4);
 
         next if $nsnames{ $local_ns->name };
 
         foreach my $usevc ( 0, 1 ) {
             my $p = $local_ns->query( $zone->name, q{SOA}, { usevc => $usevc } );
-            if ( not $p->aa ) {
+            if ( not $p or not $p->aa ) {    # Consider non-responsive server non-auth
                 push @results,
                   info(
                     IS_NOT_AUTHORITATIVE => {
@@ -242,26 +326,32 @@ sub delegation04 {
         $nsnames{ $local_ns->name }++;
     }
 
+    if ((scalar @{ Zonemaster::TestMethods->method4($zone) } or scalar @{ Zonemaster::TestMethods->method5($zone) }) and not scalar @results) {
+        push @results,
+          info(
+            ARE_AUTHORITATIVE => { }
+          );
+    }
+
     return @results;
 } ## end sub delegation04
 
 sub delegation05 {
     my ( $class, $zone ) = @_;
     my @results;
-    my %nsnames;
 
-    foreach my $local_ns ( @{ $zone->glue }, @{ $zone->ns } ) {
+    my @nsnames = uniq map { $_->string } @{ Zonemaster::TestMethods->method2($zone) }, @{ Zonemaster::TestMethods->method3($zone) };
 
-        next if $nsnames{ $local_ns->name };
+    foreach my $local_nsname ( @nsnames ) {
 
         foreach my $address_type ( q{A}, q{AAAA} ) {
-            my $p = $zone->query_one( $local_ns->name, $address_type );
+            my $p = $zone->query_one( $local_nsname, $address_type );
             if ( $p ) {
                 if ( $p->has_rrs_of_type_for_name( q{CNAME}, $zone->name ) ) {
                     push @results,
                       info(
                         NS_RR_IS_CNAME => {
-                            ns           => $local_ns->name,
+                            ns           => $local_nsname,
                             address_type => $address_type,
                         }
                       );
@@ -269,8 +359,14 @@ sub delegation05 {
             }
         }
 
-        $nsnames{ $local_ns->name }++;
     } ## end foreach my $local_ns ( @{ $zone...})
+
+    if ((scalar @{ Zonemaster::TestMethods->method2($zone) } or scalar @{ Zonemaster::TestMethods->method3($zone) }) and not scalar @results) {
+        push @results,
+          info(
+            NS_RR_NO_CNAME => { }
+          );
+    }
 
     return @results;
 } ## end sub delegation05
@@ -280,13 +376,17 @@ sub delegation06 {
     my @results;
     my %nsnames;
 
-    foreach my $local_ns ( @{ $zone->glue }, @{ $zone->ns } ) {
+    foreach my $local_ns ( @{ Zonemaster::TestMethods->method4($zone) }, @{ Zonemaster::TestMethods->method5($zone) } ) {
+
+        next if (not Zonemaster->config->ipv6_ok and $local_ns->address->version == $IP_VERSION_6);
+
+        next if (not Zonemaster->config->ipv4_ok and $local_ns->address->version == $IP_VERSION_4);
 
         next if $nsnames{ $local_ns->name };
 
         my $p = $local_ns->query( $zone->name, q{SOA} );
         if ( $p and $p->rcode eq q{NOERROR} ) {
-            if ( not length( $p->answer ) ) {
+            if ( not $p->get_records( q{SOA}, q{answer} ) ) {
                 push @results,
                   info(
                     SOA_NOT_EXISTS => {
@@ -299,6 +399,13 @@ sub delegation06 {
         $nsnames{ $local_ns->name }++;
     }
 
+    if ((scalar @{ Zonemaster::TestMethods->method4($zone) } or scalar @{ Zonemaster::TestMethods->method5($zone) }) and not scalar @results) {
+        push @results,
+          info(
+            SOA_EXISTS => { }
+          );
+    }
+
     return @results;
 } ## end sub delegation06
 
@@ -307,11 +414,11 @@ sub delegation07 {
     my @results;
 
     my %names;
-    foreach my $name ( uniq map { $_->name } @{ $zone->ns } ) {
-        $names{$name} -= 1;
-    }
-    foreach my $name ( uniq map { $_->name } @{ $zone->glue } ) {
+    foreach my $name ( @{ Zonemaster::TestMethods->method2($zone) } ) {
         $names{$name} += 1;
+    }
+    foreach my $name ( @{ Zonemaster::TestMethods->method3($zone) } ) {
+        $names{$name} -= 1;
     }
 
     my @same_name         = sort grep { $names{$_} == 0 } keys %names;
@@ -367,14 +474,12 @@ sub _max_length_name_for {
     my ( $top ) = @_;
     my @chars = q{A} .. q{Z};
 
-    my $name = q{};
-    $name = "$top";
+    my $name = name( $top )->fqdn;
+    $name = '' if $name eq '.'; # Special case for root zone
 
-    $name .= q{.} if $name !~ m/\.\z/x;
-
-    while ( length( $name ) < 253 ) {
-        my $len = 253 - length( $name );
-        $len = 63 if $len > 63;
+    while ( length( $name ) < $FQDN_MAX_LENGTH - 1 ) {
+        my $len = $FQDN_MAX_LENGTH - length( $name ) - 1;
+        $len = $LABEL_MAX_LENGTH if $len > $LABEL_MAX_LENGTH;
         $name = join( q{}, map { $chars[ rand @chars ] } 1 .. $len ) . q{.} . $name;
     }
 
@@ -398,6 +503,10 @@ Zonemaster::Test::Delegation - Tests regarding delegation details
 =item all($zone)
 
 Runs the default set of tests and returns a list of log entries made by the tests.
+
+=item translation()
+
+Returns a refernce to a hash with translation data. Used by the builtin translation system.
 
 =item metadata()
 

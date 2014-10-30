@@ -38,6 +38,14 @@ sub version {
     return "$Zonemaster::Test::Example::VERSION";
 }
 
+sub translation {
+    return { EXAMPLE_TAG => 'This is an example tag.', };
+}
+
+sub policy {
+    return { EXAMPLE_TAG => 'DEBUG', };
+}
+
 ###
 ### Tests
 ###
@@ -73,6 +81,17 @@ Runs the default set of tests and returns a list of log entries made by the test
 
 Returns a reference to a hash, the keys of which are the names of all test methods in the module, and the corresponding values are references to
 lists with all the tags that the method can use in log entries.
+
+=item translation()
+
+Returns a reference to a nested hash, where the outermost keys are language
+codes, the keys below that are message tags and their values are translation
+strings.
+
+=item policy()
+
+Returns a reference to a hash with the default policy for the module. The keys
+are message tags, and the corresponding values are their default log levels.
 
 =item version()
 

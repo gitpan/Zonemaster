@@ -1,4 +1,4 @@
-package Zonemaster::Translator v0.0.1;
+package Zonemaster::Translator v0.0.5;
 
 use 5.14.2;
 use strict;
@@ -6,54 +6,54 @@ use warnings;
 
 use Moose;
 use Carp;
+use Zonemaster;
 
-use File::ShareDir qw[dist_dir];
-use File::Slurp;
-use JSON;
+use POSIX qw[setlocale LC_MESSAGES];
+use Locale::TextDomain qw[Zonemaster];
 
-# Not necessary if a filename is given
-has 'lang' => ( is => 'ro', isa => 'Str', required => 0 );
-
-# Can be auto-generated from language code
-has 'file' => ( is => 'ro', isa => 'Maybe[Str]', lazy => 1, builder => '_find_file' );
-
-# Loaded from file
-has 'data' => ( is => 'ro', isa => 'HashRef', lazy => 1, builder => '_load_language' );
-
-around 'new' => sub {
-    my $orig  = shift;
-    my $class = shift;
-
-    my $obj = $class->$orig( @_ );
-
-    croak 'Must have at least one of lang and file'
-      if not( $obj->lang or $obj->file );
-
-    return $obj;
-};
+has 'locale' => ( is => 'rw', isa => 'Str',     lazy => 1, builder => '_get_locale' );
+has 'data'   => ( is => 'ro', isa => 'HashRef', lazy => 1, builder => '_load_data' );
 
 ###
 ### Builder Methods
 ###
 
-sub _find_file {
+sub BUILD {
     my ( $self ) = @_;
 
-    return unless defined( $self->lang );
+    $self->locale;
 
-    my $filename = sprintf( '%s/language_%s.json', dist_dir( 'Zonemaster' ), $self->lang );
-    if ( not -r $filename ) {
-        croak "Cannot read translation file " . $filename . "\n";
+    return $self;
+}
+
+sub _get_locale {
+    my $locale = $ENV{LANG} || $ENV{LC_ALL} || $ENV{LC_MESSAGES} || 'en_US.UTF-8';
+    setlocale( LC_MESSAGES, $locale );
+
+    return $locale;
+}
+
+sub _load_data {
+    my %data;
+
+    $data{SYSTEM} = _system_translation();
+    foreach my $mod ( 'Basic', Zonemaster->modules ) {
+        my $module = 'Zonemaster::Test::' . $mod;
+        $data{ uc( $mod ) } = $module->translation();
     }
 
-    return $filename;
+    return \%data;
 }
 
-sub _load_language {
+###
+### Method modifiers
+###
+
+after 'locale' => sub {
     my ( $self ) = @_;
 
-    return decode_json read_file $self->file;
-}
+    setlocale( LC_MESSAGES, $self->{locale} );
+};
 
 ###
 ### Working methods
@@ -67,7 +67,6 @@ sub to_string {
 
 sub translate_tag {
     my ( $self, $entry ) = @_;
-    no warnings 'uninitialized';
 
     my $string = $self->data->{ $entry->module }{ $entry->tag };
 
@@ -75,18 +74,33 @@ sub translate_tag {
         return $entry->string;
     }
 
-    foreach my $arg ( keys %{ $entry->args } ) {
-        if ( not $string =~ s/\{$arg\}/$entry->args->{$arg}/e ) {
-            # warn "Unused entry argument '$arg";
-        }
-    }
+    return __x( $string, %{ $entry->args } );
+}
 
-    while ( $string =~ /\{(\w+)\}/g ) {
-        warn "Expected argument $1 not provided";
-    }
+sub _system_translation {
+    return {
+        "CANNOT_CONTINUE"       => "Not enough data about {zone} was found to be able to run tests.",
+        "CONFIG_FILE"           => "Configuration was read from {name}.",
+        "DEPENDENCY_VERSION"    => "Using prerequisite module {name} version {version}.",
+        "LOGGER_CALLBACK_ERROR" => "Logger callback died with error: {exception}",
+        "LOOKUP_ERROR"          => "DNS query to {ns} for {name}/{type}/{class} failed with error: {message}",
+        "MODULE_ERROR"          => "Fatal error in {module}: {msg}",
+        "MODULE_VERSION"        => "Using module {module} version {version}.",
+        "NO_NETWORK"            => "Both IPv4 and IPv6 are disabled.",
+        "POLICY_FILE"           => "Policy was read from {name}.",
+        "POLICY_DISABLED"       => "The module {name} was disabled by the policy.",
+        "UNKNOWN_METHOD"        => "Request to run unknown method {method} in module {module}.",
+        "UNKNOWN_MODULE"        => "Request to run {method} in unknown module {module}. Known modules: {known}.",
+        "SKIP_IPV4_DISABLED"    => "IPv4 is disabled, not sending query to {ns}.",
+        "SKIP_IPV6_DISABLED"    => "IPv6 is disabled, not sending query to {ns}.",
+        "FAKE_DELEGATION"       => "Followed a fake delegation.",
+        "ADDED_FAKE_DELEGATION" => "Added a fake delegation for domain {domain} to name server {ns}.",
+        "FAKE_DELEGATION_TO_SELF" => "Name server {ns} not adding fake delegation for domain {domain} to itself.",
+    };
+}
 
-    return $string;
-} ## end sub translate_tag
+no Moose;
+__PACKAGE__->meta->make_immutable;
 
 1;
 
@@ -103,18 +117,14 @@ Zonemaster::Translator - translation support for Zonemaster
 
 =over
 
-=item lang
+=item locale
 
-The language code for the language the translator should use. Either this or C<file> must be provided.
-
-=item file
-
-The file from which the translation data will be loaded. If it is not provided but C<lang> is, an attempt will be made to load a file called
-F<language_lang.json> from the Zonemaster distribution directory.
+The locale that should be used to find translation data.
 
 =item data
 
-A reference to a hash with translation data.
+A reference to a hash with translation data. This is unlikely to be useful to
+end-users.
 
 =back
 
@@ -130,6 +140,10 @@ entry.
 =item translate_tag
 
 Takes a L<Zonemaster::Logger::Entry> object as its argument and returns a translation of its tag and arguments.
+
+=item BUILD
+
+Internal method that's only mentioned here to placate L<Pod::Coverage>.
 
 =back
 

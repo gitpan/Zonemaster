@@ -1,4 +1,4 @@
-package Zonemaster::Packet v0.0.1;
+package Zonemaster::Packet v0.0.2;
 
 use 5.14.2;
 use Moose;
@@ -26,6 +26,10 @@ has 'packet' => (
           edns_size
           edns_rcode
           has_edns
+          id
+          querytime
+          do
+          opcode
           )
     ]
 );
@@ -35,7 +39,7 @@ sub no_such_record {
 
     if ( $self->type eq 'nodata' ) {
         my ( $q ) = $self->question;
-        info( NO_SUCH_RECORD => { name => $q->name, type => $q->type } );
+        Zonemaster::Util::info( NO_SUCH_RECORD => { name => Zonemaster::Util::name($q->name), type => $q->type } );
 
         return 1;
     }
@@ -49,7 +53,7 @@ sub no_such_name {
 
     if ( $self->type eq 'nxdomain' ) {
         my ( $q ) = $self->question;
-        info( NO_SUCH_NAME => { name => $q->name, type => $q->type } );
+        info( NO_SUCH_NAME => { name => name($q->name), type => $q->type } );
 
         return 1;
     }
@@ -64,7 +68,7 @@ sub is_redirect {
     if ( $self->type eq 'referral' ) {
         my ( $q ) = $self->question;
         my ( $a ) = $self->authority;
-        info( IS_REDIRECT => { name => $q->name, type => $q->type, to => $a->name } );
+        Zonemaster::Util::info( IS_REDIRECT => { name => Zonemaster::Util::name($q->name), type => $q->type, to => Zonemaster::Util::name($a->name) } );
 
         return 1;
     }
@@ -102,17 +106,21 @@ sub get_records {
 sub get_records_for_name {
     my ( $self, $type, $name ) = @_;
 
-    return grep { $_->name eq $name } $self->get_records( $type );
+    return grep { name($_->name) eq name($name) } $self->get_records( $type );
 }
 
 sub has_rrs_of_type_for_name {
     my ( $self, $type, $name ) = @_;
 
-    return ( grep { $_->name eq $name } $self->get_records( $type ) ) > 0;
+    return ( grep { name($_->name) eq name($name) } $self->get_records( $type ) ) > 0;
 }
 
 sub answerfrom {
-    my ( $self ) = @_;
+    my ( $self, @args ) = @_;
+
+    if (@args) {
+        $self->packet->answerfrom(@args);
+    }
 
     my $from = $self->packet->answerfrom // '<unknown>';
 
@@ -124,6 +132,9 @@ sub TO_JSON {
 
     return { 'Zonemaster::Packet' => $self->packet };
 }
+
+no Moose;
+__PACKAGE__->meta->make_immutable;
 
 1;
 
@@ -182,5 +193,93 @@ Wrapper for the underlying packet method, that replaces udnefined values with th
 =item TO_JSON
 
 Support method for L<JSON> to be able to serialize these objects.
+
+=back
+
+=head1 METHODS PASSED THROUGH
+
+These methods are passed through transparently to the underlying L<Net::LDNS::Packet> object.
+
+=over
+
+=item *
+
+data
+
+=item *
+
+rcode
+
+=item *
+
+aa
+
+=item *
+
+question
+
+=item *
+
+answer
+
+=item *
+
+authority
+
+=item *
+
+additional
+
+=item *
+
+print
+
+=item *
+
+string
+
+=item *
+
+answersize
+
+=item *
+
+unique_push
+
+=item *
+
+timestamp
+
+=item *
+
+type
+
+=item *
+
+edns_size
+
+=item *
+
+edns_rcode
+
+=item *
+
+has_edns
+
+=item *
+
+id
+
+=item *
+
+querytime
+
+=item *
+
+do
+
+=item *
+
+opcode
 
 =back

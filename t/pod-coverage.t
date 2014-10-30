@@ -30,9 +30,14 @@ find(
 foreach my $name ( @modules ) {
     my $pc = Pod::Coverage->new( package => $name );
     if ( defined $pc->coverage ) {
+        my @uncovered = $pc->uncovered;
+        if (@uncovered == 1 and $uncovered[0] eq 'LC_MESSAGES') {
+            next;
+        }
+
         is( $pc->coverage, 1.0, $name );
         if ( $pc->coverage < 1.0 ) {
-            foreach my $name ( $pc->uncovered ) {
+            foreach my $name ( @uncovered ) {
                 diag "Function '$name' not documented";
             }
         }

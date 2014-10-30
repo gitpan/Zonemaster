@@ -15,7 +15,7 @@ my %saved_axfr;
 setup( $datafile );
 
 # This should be a successful AXFR
-my $ns = Zonemaster::Nameserver->new( { name => 'willow.faerywicca.se', address => '79.99.7.203' } );
+my $ns = Zonemaster::Nameserver->new( { name => 'kennedy.faerywicca.se', address => '46.21.106.227' } );
 my $counter = 0;
 is(
     exception {
@@ -49,7 +49,9 @@ done_testing;
 sub setup {
     my ( $datafile ) = @_;
     my $meta = Class::MOP::Class->initialize( 'Zonemaster::Nameserver' );
+    $meta->make_mutable;
     if ( not $ENV{ZONEMASTER_RECORD} ) {
+
         # Replay
         die "Stored data file missing" if not -r $datafile;
         open my $fh, '<', $datafile or die "Failed to open $datafile for reading: $!\n";
@@ -68,7 +70,7 @@ sub setup {
                 $saved_axfr{$domain} = $str;
             }
         }
-        config->{no_network} = 1;
+        Zonemaster->config->no_network( 1 );
         $meta->add_around_method_modifier(
             'axfr',
             sub {

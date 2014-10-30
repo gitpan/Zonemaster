@@ -1,17 +1,17 @@
-package Zonemaster::Recursor v0.0.1;
+package Zonemaster::Recursor v0.0.2;
 
 use 5.14.2;
 use Moose;
 use JSON::PP;
 use Zonemaster::Util;
-use Net::IP;
+use Net::IP::XS;
 use Zonemaster;
 
 my $seed_data;
 
 our %recurse_cache;
 
-INIT {
+{
     local $/;
     my $json = <DATA>;
     $seed_data = decode_json $json;
@@ -19,6 +19,7 @@ INIT {
 
 sub recurse {
     my ( $self, $name, $type, $class ) = @_;
+    $name = name($name);
     $type  //= 'A';
     $class //= 'IN';
 
@@ -29,7 +30,8 @@ sub recurse {
     }
 
     my ( $p, $state ) =
-      $self->_recurse( $name, $type, $class, { ns => [ root_servers() ], count => 0, common => 0, seen => {} } );
+      $self->_recurse( $name, $type, $class,
+        { ns => [ root_servers() ], count => 0, common => 0, seen => {}, glue => {} } );
     $recurse_cache{$name}{$type}{$class} = $p;
 
     return $p;
@@ -37,11 +39,11 @@ sub recurse {
 
 sub parent {
     my ( $self, $name ) = @_;
+    $name = name($name);
 
     my ( $p, $state ) =
-      $self->_recurse( $name, 'SOA', 'IN', { ns => [ root_servers() ], count => 0, common => 0, seen => {} } );
-
-    return if not $p;
+      $self->_recurse( $name, 'SOA', 'IN',
+        { ns => [ root_servers() ], count => 0, common => 0, seen => {}, glue => {} } );
 
     my $pname;
     if ( name( $state->{trace}[0] ) eq name( $name ) ) {
@@ -61,10 +63,16 @@ sub parent {
 
 sub _recurse {
     my ( $self, $name, $type, $class, $state ) = @_;
+    $name = '' . name($name);
+
+    if ( $state->{in_progress}{$name}{$type} ) {
+        return;
+    }
+    $state->{in_progress}{$name}{$type} = 1;
 
     while ( my $ns = pop @{ $state->{ns} } ) {
         Zonemaster->logger->add( RECURSE_QUERY => { ns => "$ns", name => $name, type => $type, class => $class } );
-        my $p = $ns->query( $name, $type, { class => $class } );
+        my $p = $self->_do_query( $ns, $name, $type, { class => $class }, $state );
 
         next if not $p;    # Ask next server if no response
 
@@ -74,57 +82,107 @@ sub _recurse {
             next;
         }
 
-        return ( $p, $state )
-          if $p->no_such_record;    # Node exists, but not record
-        return ( $p, $state ) if $p->no_such_name;    # Node does not exist
-        return ( $p, $state )
-          if $self->_is_answer( $p );                 # Return answer
+        if ( $p->no_such_record ) {    # Node exists, but not record
+            return ( $p, $state );
+        }
+
+        if ( $p->no_such_name ) {      # Node does not exist
+            return ( $p, $state );
+        }
+
+        if ( $self->_is_answer( $p ) ) {    # Return answer
+            return ( $p, $state );
+        }
 
         # So it's not an error, not an empty response and not an answer
 
         if ( $p->is_redirect ) {
-            my $zname = ( $p->get_records( 'ns' ) )[0]->name;
-            next if $state->{seen}{$zname};           # We followed this redirect before
+            my $zname = name(lc(( $p->get_records( 'ns' ) )[0]->name));
+
+            next if $state->{seen}{$zname};    # We followed this redirect before
 
             $state->{seen}{$zname} = 1;
             my $common = name( $zname )->common( name( $state->{qname} ) );
 
             next
-              if $common < $state->{common};          # Redirect going up the hierarchy is not OK
+              if $common < $state->{common};    # Redirect going up the hierarchy is not OK
 
             $state->{common} = $common;
             $state->{ns} = $self->get_ns_from( $p, $state );    # Follow redirect
             $state->{count} += 1;
+            return (undef, $state) if $state->{count} > 20;    # Loop protection
             unshift @{ $state->{trace} }, $zname;
-        }
 
-        return if $state->{count} > 20;    # Loop protection
+            next;
+        }
     } ## end while ( my $ns = pop @{ $state...})
     return ( $state->{candidate}, $state ) if $state->{candidate};
 
-    return;
+    return (undef, $state);
 } ## end sub _recurse
 
-sub get_ns_from {
-    my ( $self, $p, $state ) = @_;
-    my @new;
+sub _do_query {
+    my ( $self, $ns, $name, $type, $opts, $state ) = @_;
 
-    my @names = sort map { name( $_->nsdname ) } $p->get_records( 'ns' );
+    if ( ref( $ns ) and $ns->can('query') ) {
+        my $p = $ns->query( $name, $type, $opts );
 
-    $state->{glue}{ name( $_->name ) }{ $_->address } = 1 for ( $p->get_records( 'a' ), $p->get_records( 'aaaa' ) );
-
-    foreach my $name ( @names ) {
-        if ( $state->{glue}{$name} ) {
-            push @new, ns( $name, $_ ) for keys %{ $state->{glue}{$name} };
+        if ( $p ) {
+            for my $rr ( grep { $_->type eq 'A' or $_->type eq 'AAAA' } $p->answer, $p->additional ) {
+                $state->{glue}{ lc(name( $rr->name )) }{ $rr->address } = 1;
+            }
         }
-        else {
-            foreach my $a ( $self->get_addresses_for( $name, $state ) ) {
-                push @new, ns( $name, $a->short );
+        return $p;
+    }
+    elsif ( my $href = $state->{glue}{ lc(name( $ns )) }) {
+        foreach my $addr (keys %$href) {
+            my $realns = ns($ns, $addr);
+            my $p = $self->_do_query($realns, $name, $type, $opts, $state);
+            if ($p) {
+                return $p;
             }
         }
     }
+    else {
+        $state->{glue}{ lc(name( $ns )) } = {};
+        my @addr = $self->get_addresses_for( $ns, $state );
+        if ( @addr > 0 ) {
+            foreach my $addr ( @addr ) {
+                $state->{glue}{ lc(name( $ns )) }{$addr->short} = 1;
+                my $new = ns( $ns, $addr->short );
+                my $p = $new->query( $name, $type, $opts );
+                return $p if $p;
+            }
+        }
+        else {
+            return;
+        }
+    }
+} ## end sub _do_query
 
-    return [ sort { $a->name cmp $b->name or $a->address->ip cmp $b->address->ip } @new ];
+sub get_ns_from {
+    my ( $self, $p, $state ) = @_;
+    my ( @new, @extra );
+
+    my @names = sort map { name( lc($_->nsdname) ) } $p->get_records( 'ns' );
+
+    $state->{glue}{ lc(name( $_->name )) }{ $_->address } = 1 for ( $p->get_records( 'a' ), $p->get_records( 'aaaa' ) );
+
+    foreach my $name ( @names ) {
+        if ( exists $state->{glue}{ lc(name( $name )) } ) {
+            for my $addr (keys %{ $state->{glue}{ lc(name( $name )) } }) {
+                push @new, ns( $name, $addr );
+            }
+        }
+        else {
+            push @extra, $name;
+        }
+    }
+
+    @new = sort { $a->name cmp $b->name or $a->address->ip cmp $b->address->ip } @new;
+    @extra = sort { $a cmp $b } @extra;
+
+    return [ @new, @extra ];
 } ## end sub get_ns_from
 
 sub get_addresses_for {
@@ -133,39 +191,43 @@ sub get_addresses_for {
     $state //=
       { ns => [ root_servers() ], count => 0, common => 0, seen => {} };
 
-    return if $state->{name_seen}{"$name"};
-    $state->{name_seen}{"$name"} = 1;
-
     my ( $pa ) = $self->_recurse(
         "$name", 'A', 'IN',
         {
-            ns        => [ root_servers() ],
-            count     => $state->{count},
-            common    => 0,
-            name_seen => $state->{name_seen},
-            glue      => $state->{glue}
+            ns          => [ root_servers() ],
+            count       => $state->{count},
+            common      => 0,
+            in_progress => $state->{in_progress},
+            glue        => $state->{glue}
         }
     );
+
+    # Name does not exist, just stop
+    if ($pa and $pa->no_such_name) {
+        return;
+    }
+
     my ( $paaaa ) = $self->_recurse(
         "$name", 'AAAA', 'IN',
         {
-            ns        => [ root_servers() ],
-            count     => $state->{count},
-            common    => 0,
-            name_seen => $state->{name_seen},
-            glue      => $state->{glue}
+            ns          => [ root_servers() ],
+            count       => $state->{count},
+            common      => 0,
+            in_progress => $state->{in_progress},
+            glue        => $state->{glue}
         }
     );
 
     my @rrs;
     push @rrs, $pa->get_records( 'a' )       if $pa;
     push @rrs, $paaaa->get_records( 'aaaa' ) if $paaaa;
+
     foreach my $rr (
         sort { $a->address cmp $b->address }
         grep { name( $_->name ) eq $name } @rrs
       )
     {
-        push @res, Net::IP->new( $rr->address );
+        push @res, Net::IP::XS->new( $rr->address );
     }
 
     return @res;
@@ -185,6 +247,9 @@ sub root_servers {
     return map { Zonemaster::Util::ns( $_->{name}, $_->{address} ) }
       sort { $a->{name} cmp $b->{name} } @{ $seed_data->{'.'} };
 }
+
+no Moose;
+__PACKAGE__->meta->make_immutable;
 
 1;
 

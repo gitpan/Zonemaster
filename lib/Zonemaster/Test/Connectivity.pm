@@ -6,53 +6,14 @@ use warnings;
 
 use Zonemaster;
 use Zonemaster::Util;
-use Zonemaster::Test::Address;
-
+use Zonemaster::TestMethods;
+use Zonemaster::Constants qw[:ip];
+use Zonemaster::ASNLookup;
 use Carp;
 
-use Readonly;
-use List::Util qw[minstr];
+use List::MoreUtils qw[uniq];
 
-Readonly our $ASN_UNASSIGNED_UNANNOUNCED_ADDRESS_SPACE_VALUE => 4_294_967_295;
-Readonly our $IP_VERSION_4                                   => $Zonemaster::Test::Address::IP_VERSION_4;
-Readonly our $IP_VERSION_6                                   => $Zonemaster::Test::Address::IP_VERSION_6;
-Readonly our $ASN_CHECKING_TEAM_CYMRU_SERVICE_NAME           => q{TEAMCYRU};
-Readonly our $ASN_CHECKING_ROUTE_VIEWS_SERVICE_NAME          => q{ROUTEVIEWS};
-Readonly our $ASN_CHECKING_SERVICE_USED                      => $ASN_CHECKING_TEAM_CYMRU_SERVICE_NAME;
-Readonly our $ASN_IPV4_CHECKING_SERVICE_TEAM_CYMRU_DOMAIN    => q{.origin.asn.cymru.com.};
-Readonly our $ASN_IPV6_CHECKING_SERVICE_TEAM_CYMRU_DOMAIN    => q{.origin6.asn.cymru.com.};
-Readonly our $ASN_IPV4_CHECKING_SERVICE_ROUTE_VIEWS_DOMAIN   => q{.asn.routeviews.org.};
-Readonly our $ASN_IPV6_CHECKING_SERVICE_ROUTE_VIEWS_DOMAIN   => q{};
 
-Readonly::Hash our %ASN_CHECKING_SERVICE_DOMAIN => {
-    $ASN_CHECKING_TEAM_CYMRU_SERVICE_NAME => {
-        descr         => q{Team Cymru Community services 'https://www.team-cymru.org/'},
-        $IP_VERSION_4 => $ASN_IPV4_CHECKING_SERVICE_TEAM_CYMRU_DOMAIN,
-        $IP_VERSION_6 => $ASN_IPV6_CHECKING_SERVICE_TEAM_CYMRU_DOMAIN,
-        f             => sub {
-            my ( $txt, $rcode ) = @_;
-            my ( $asn );
-            if ( $rcode eq q{NXDOMAIN} ) {
-                $asn = $ASN_UNASSIGNED_UNANNOUNCED_ADDRESS_SPACE_VALUE;
-            }
-            else {
-                $txt =~ s/\A"|"\z//smgx;
-                ( $asn ) = split /\s+/smx, $txt;
-            }
-            return ( $asn );
-        },
-    },
-    $ASN_CHECKING_ROUTE_VIEWS_SERVICE_NAME => {
-        descr         => q{University of Oregon Route Views Project 'http://www.routeviews.org/'},
-        $IP_VERSION_4 => $ASN_IPV4_CHECKING_SERVICE_ROUTE_VIEWS_DOMAIN,
-        $IP_VERSION_6 => $ASN_IPV6_CHECKING_SERVICE_ROUTE_VIEWS_DOMAIN,
-        f             => sub {
-            my ( $txt, $rcode ) = @_;
-            my ( $asn, $prefix, $prefix_len ) = map { my $r = $_; $r =~ s/"//smgx; $r } split /\s+/smx, $txt;
-            return ( $asn );
-        },
-    },
-};
 ###
 ### Entry Points
 ###
@@ -64,7 +25,6 @@ sub all {
     push @results, $class->connectivity01( $zone );
     push @results, $class->connectivity02( $zone );
     push @results, $class->connectivity03( $zone );
-    push @results, $class->connectivity04( $zone );
 
     return @results;
 }
@@ -91,20 +51,37 @@ sub metadata {
         ],
         connectivity03 => [
             qw(
-              NAMESERVER_IPV6_ADDRESS_BOGON
-              NAMESERVER_IPV6_ADDRESSES_NOT_BOGON
-              )
-        ],
-        connectivity04 => [
-            qw(
-              NAMESERVER_WITH_UNALLOCATED_ADDRESS
-              NAMESERVERS_WITH_UNIQ_AS
-              NAMESERVERS_IPV4_WITH_UNIQ_AS
-              NAMESERVERS_IPV6_WITH_UNIQ_AS
+                NAMESERVERS_IPV4_NO_AS
+                NAMESERVERS_IPV4_WITH_MULTIPLE_AS
+                NAMESERVERS_IPV4_WITH_UNIQ_AS
+                NAMESERVERS_IPV6_NO_AS
+                NAMESERVERS_IPV6_WITH_MULTIPLE_AS
+                NAMESERVERS_IPV6_WITH_UNIQ_AS
+                NAMESERVERS_NO_AS
+                NAMESERVERS_WITH_MULTIPLE_AS
+                NAMESERVERS_WITH_UNIQ_AS
               )
         ],
     };
 } ## end sub metadata
+
+sub translation {
+    return {
+        'NAMESERVERS_IPV4_WITH_UNIQ_AS'     => 'All nameservers IPv4 addresses are in the same AS ({asn}).',
+        'NAMESERVERS_IPV6_WITH_UNIQ_AS'     => 'All nameservers IPv6 addresses are in the same AS ({asn}).',
+        'NAMESERVERS_WITH_MULTIPLE_AS'      => 'Domain\'s authoritative nameservers do not belong to the same AS.',
+        'NAMESERVERS_WITH_UNIQ_AS'          => 'All nameservers are in the same AS ({asn}).',
+        'NAMESERVERS_IPV4_NO_AS'            => 'No IPv4 nameserver address is in an AS.',
+        'NAMESERVERS_IPV4_WITH_MULTIPLE_AS' => 'Authoritative IPv4 nameservers are in more than one AS.',
+        'NAMESERVERS_IPV6_NO_AS'            => 'No IPv6 nameserver address is in an AS.',
+        'NAMESERVERS_IPV6_WITH_MULTIPLE_AS' => 'Authoritative IPv6 nameservers are in more than one AS.',
+        'NAMESERVERS_NO_AS'                 => 'No nameserver address is in an AS.',
+        'NAMESERVER_HAS_TCP_53'             => 'Nameserver {ns}/{address} accessible over TCP on port 53.',
+        'NAMESERVER_HAS_UDP_53'             => 'Nameserver {ns}/{address} accessible over UDP on port 53.',
+        'NAMESERVER_NO_TCP_53'              => 'Nameserver {ns}/{address} not accessible over TCP on port 53.',
+        'NAMESERVER_NO_UDP_53'              => 'Nameserver {ns}/{address} not accessible over UDP on port 53.',
+    };
+}
 
 sub version {
     return "$Zonemaster::Test::Connectivity::VERSION";
@@ -120,20 +97,24 @@ sub connectivity01 {
 
     my %ips;
 
-    foreach my $local_ns ( @{ $zone->ns } ) {
+    foreach
+      my $local_ns ( @{ Zonemaster::TestMethods->method4( $zone ) }, @{ Zonemaster::TestMethods->method5( $zone ) } )
+    {
+
+        next if ( not Zonemaster->config->ipv6_ok and $local_ns->address->version == $IP_VERSION_6 );
+
+        next if ( not Zonemaster->config->ipv4_ok and $local_ns->address->version == $IP_VERSION_4 );
 
         next if $ips{ $local_ns->address->short };
 
-        my $ns =
-          Zonemaster::Nameserver->new( { name => $local_ns->name->string, address => $local_ns->address->short } );
-        my $p = $ns->query( $zone->name, q{SOA}, { usevc => 0 } );
+        my $p = $local_ns->query( $zone->name, q{SOA}, { usevc => 0 } );
 
         if ( $p and $p->rcode eq q{NOERROR} ) {
             push @results,
               info(
                 NAMESERVER_HAS_UDP_53 => {
-                    ns      => $ns->name->string,
-                    address => $ns->address->short,
+                    ns      => $local_ns->name->string,
+                    address => $local_ns->address->short,
                 }
               );
         }
@@ -141,46 +122,15 @@ sub connectivity01 {
             push @results,
               info(
                 NAMESERVER_NO_UDP_53 => {
-                    ns      => $ns->name->string,
-                    address => $ns->address->short,
+                    ns      => $local_ns->name->string,
+                    address => $local_ns->address->short,
                 }
               );
         }
 
-        $ips{ $ns->address->short }++;
+        $ips{ $local_ns->address->short }++;
 
-    } ## end foreach my $local_ns ( @{ $zone...})
-
-    foreach my $local_ns ( @{ $zone->glue } ) {
-
-        next if $ips{ $local_ns->address->short };
-
-        my $ns =
-          Zonemaster::Nameserver->new( { name => $local_ns->name->string, address => $local_ns->address->short } );
-        my $p = $ns->query( $zone->name, q{SOA}, { usevc => 0 } );
-
-        if ( $p and $p->rcode eq q{NOERROR} ) {
-            push @results,
-              info(
-                NAMESERVER_HAS_UDP_53 => {
-                    ns      => $ns->name->string,
-                    address => $ns->address->short,
-                }
-              );
-        }
-        else {
-            push @results,
-              info(
-                NAMESERVER_NO_UDP_53 => {
-                    ns      => $ns->name->string,
-                    address => $ns->address->short,
-                }
-              );
-        }
-
-        $ips{ $ns->address->short }++;
-
-    } ## end foreach my $local_ns ( @{ $zone...})
+    } ## end foreach my $local_ns ( @{ Zonemaster::TestMethods...})
 
     return @results;
 } ## end sub connectivity01
@@ -190,20 +140,24 @@ sub connectivity02 {
     my @results;
     my %ips;
 
-    foreach my $local_ns ( @{ $zone->ns } ) {
+    foreach
+      my $local_ns ( @{ Zonemaster::TestMethods->method4( $zone ) }, @{ Zonemaster::TestMethods->method5( $zone ) } )
+    {
+
+        next if ( not Zonemaster->config->ipv6_ok and $local_ns->address->version == $IP_VERSION_6 );
+
+        next if ( not Zonemaster->config->ipv4_ok and $local_ns->address->version == $IP_VERSION_4 );
 
         next if $ips{ $local_ns->address->short };
 
-        my $ns =
-          Zonemaster::Nameserver->new( { name => $local_ns->name->string, address => $local_ns->address->short } );
-        my $p = $ns->query( $zone->name, q{SOA}, { usevc => 1 } );
+        my $p = $local_ns->query( $zone->name, q{SOA}, { usevc => 1 } );
 
         if ( $p and $p->rcode eq q{NOERROR} ) {
             push @results,
               info(
                 NAMESERVER_HAS_TCP_53 => {
-                    ns      => $ns->name->string,
-                    address => $ns->address->short,
+                    ns      => $local_ns->name->string,
+                    address => $local_ns->address->short,
                 }
               );
         }
@@ -211,46 +165,15 @@ sub connectivity02 {
             push @results,
               info(
                 NAMESERVER_NO_TCP_53 => {
-                    ns      => $ns->name->string,
-                    address => $ns->address->short,
+                    ns      => $local_ns->name->string,
+                    address => $local_ns->address->short,
                 }
               );
         }
 
-        $ips{ $ns->address->short }++;
+        $ips{ $local_ns->address->short }++;
 
-    } ## end foreach my $local_ns ( @{ $zone...})
-
-    foreach my $local_ns ( @{ $zone->glue } ) {
-
-        next if $ips{ $local_ns->address->short };
-
-        my $ns =
-          Zonemaster::Nameserver->new( { name => $local_ns->name->string, address => $local_ns->address->short } );
-        my $p = $ns->query( $zone->name, q{SOA}, { usevc => 1 } );
-
-        if ( $p and $p->rcode eq q{NOERROR} ) {
-            push @results,
-              info(
-                NAMESERVER_HAS_TCP_53 => {
-                    ns      => $ns->name->string,
-                    address => $ns->address->short,
-                }
-              );
-        }
-        else {
-            push @results,
-              info(
-                NAMESERVER_NO_TCP_53 => {
-                    ns      => $ns->name->string,
-                    address => $ns->address->short,
-                }
-              );
-        }
-
-        $ips{ $ns->address->short }++;
-
-    } ## end foreach my $local_ns ( @{ $zone...})
+    } ## end foreach my $local_ns ( @{ Zonemaster::TestMethods...})
 
     return @results;
 } ## end sub connectivity02
@@ -258,138 +181,55 @@ sub connectivity02 {
 sub connectivity03 {
     my ( $class, $zone ) = @_;
     my @results;
-    my %ips;
-    my $ipv6_nb = 0;
 
-    foreach my $local_ns ( @{ $zone->ns }, @{ $zone->glue } ) {
+    my %ips = ( 4 => {}, 6 => {} );
 
-        next if not $local_ns->address;
-        next if not $local_ns->address->version == $IP_VERSION_6;
-        next if $ips{ $local_ns->address->short };
+    foreach
+      my $ns ( @{ Zonemaster::TestMethods->method4( $zone ) }, @{ Zonemaster::TestMethods->method5( $zone ) } )
+    {
+        my $addr = $ns->address;
+        $ips{$addr->version}{$addr->ip} = $addr;
+    }
 
-        $ipv6_nb++;
+    my @v4ips = values %{$ips{4}};
+    my @v6ips = values %{$ips{6}};
 
-        my $reverse_ip_query = $local_ns->address->reverse_ip;
-        $reverse_ip_query =~ s/ip6.arpa./v6.fullbogons.cymru.com./smx;
+    my @v4asns   = uniq grep {$_} map {Zonemaster::ASNLookup->get($_)} @v4ips;
+    my @v6asns   = uniq grep {$_} map {Zonemaster::ASNLookup->get($_)} @v6ips;
+    my @all_asns = uniq(@v4asns, @v6asns);
 
-        my $p = Zonemaster::Recursor->recurse( $reverse_ip_query );
+    if (@v4asns == 1) {
+        push @results, info( NAMESERVERS_IPV4_WITH_UNIQ_AS => { asn => $v4asns[0] } );
+    }
+    elsif ( @v4asns > 1 ) {
+        push @results, info( NAMESERVERS_IPV4_WITH_MULTIPLE_AS => { asn => join(';', @v4asns) } );
+    }
+    else {
+        push @results, info( NAMESERVERS_IPV4_NO_AS => { } );
+    }
 
-        if ( $p ) {
-            if ( $p->rcode ne q{NXDOMAIN} ) {
-                foreach my $rr ( $p->answer ) {
-                    if ( $rr->type eq q{A} and $rr->address eq q{127.0.0.2} ) {
-                        push @results,
-                          info(
-                            NAMESERVER_IPV6_ADDRESS_BOGON => {
-                                ns      => $local_ns->name->string,
-                                address => $local_ns->address->short,
-                            }
-                          );
-                    }
-                }
-            }
-        }
+    if (@v6asns == 1) {
+        push @results, info( NAMESERVERS_IPV6_WITH_UNIQ_AS => { asn => $v6asns[0] } );
+    }
+    elsif ( @v6asns > 1 ) {
+        push @results, info( NAMESERVERS_IPV6_WITH_MULTIPLE_AS => { asn => join(';', @v6asns) } );
+    }
+    else {
+        push @results, info( NAMESERVERS_IPV6_NO_AS => { } );
+    }
 
-        $ips{ $local_ns->address->short }++;
-
-    } ## end foreach my $local_ns ( @{ $zone...})
-
-    if ( $ipv6_nb > 0 and not grep { $_->tag eq q{NAMESERVER_IPV6_ADDRESS_BOGON} } @results ) {
-        push @results,
-          info(
-            NAMESERVER_IPV6_ADDRESSES_NOT_BOGON => {
-                nb => $ipv6_nb,
-            }
-          );
+    if (@all_asns == 1) {
+        push @results, info( NAMESERVERS_WITH_UNIQ_AS => { asn => $all_asns[0] } );
+    }
+    elsif ( @all_asns > 1 ) {
+        push @results, info( NAMESERVERS_WITH_MULTIPLE_AS => { asn => join(';', @all_asns) } );
+    }
+    else {
+        push @results, info( NAMESERVERS_NO_AS => { } ); # Shouldn't pass Basic
     }
 
     return @results;
 } ## end sub connectivity03
-
-sub connectivity04 {
-    my ( $class, $zone ) = @_;
-    my @results;
-    my ( %ips, %asns );
-
-    foreach my $local_ns ( @{ $zone->ns }, @{ $zone->glue } ) {
-
-        next if $ips{ $local_ns->address->short };
-
-        my $reverse_ip_query = $local_ns->address->reverse_ip;
-
-        if ( not $ASN_CHECKING_SERVICE_DOMAIN{$ASN_CHECKING_SERVICE_USED}{ $local_ns->address->version } ) {
-            push @results,
-              info(
-                ADDRESS_TYPE_NOT_IMPLEMENTED => {
-                    service => $ASN_CHECKING_SERVICE_DOMAIN{$ASN_CHECKING_SERVICE_USED}{descr},
-                    type    => $local_ns->address->version,
-                }
-              );
-            next;
-        }
-
-        $reverse_ip_query =~
-          s/\.[^\.*]*\.arpa./$ASN_CHECKING_SERVICE_DOMAIN{$ASN_CHECKING_SERVICE_USED}{$local_ns->address->version}/smx;
-
-        my $p = Zonemaster::Recursor->recurse( $reverse_ip_query, q{TXT} );
-
-        if ( $p ) {
-            my ( $txt ) = $p->get_records_for_name( q{TXT}, $reverse_ip_query );
-            my ( $asn ) = &{ $ASN_CHECKING_SERVICE_DOMAIN{$ASN_CHECKING_SERVICE_USED}{f} }( $txt->txtdata, $p->rcode );
-            if ( $asn == $ASN_UNASSIGNED_UNANNOUNCED_ADDRESS_SPACE_VALUE ) {
-                push @results,
-                  info(
-                    NAMESERVER_WITH_UNALLOCATED_ADDRESS => {
-                        ns      => $local_ns->name->string,
-                        address => $local_ns->address->short,
-                    }
-                  );
-            }
-            else {
-                $asns{ $local_ns->address->version }{$asn}++;
-            }
-        }
-
-        $ips{ $local_ns->address->short }++;
-
-    } ## end foreach my $local_ns ( @{ $zone...})
-
-    if (
-           ( scalar keys %{ $asns{$IP_VERSION_4} } == 1 and scalar keys %{ $asns{$IP_VERSION_6} } == 0 )
-        or ( scalar keys %{ $asns{$IP_VERSION_6} } == 1 and scalar keys %{ $asns{$IP_VERSION_4} } == 0 )
-        or (    scalar keys %{ $asns{$IP_VERSION_4} } == 1
-            and scalar keys %{ $asns{$IP_VERSION_6} } == 1
-            and minstr( keys %{ $asns{$IP_VERSION_4} } ) == minstr( keys %{ $asns{$IP_VERSION_6} } ) )
-      )
-    {
-        push @results,
-          info(
-            NAMESERVERS_WITH_UNIQ_AS => {
-                asn => minstr( keys %{ $asns{$IP_VERSION_4} } ),
-            }
-          );
-    }
-    else {
-        if ( scalar keys %{ $asns{$IP_VERSION_4} } == 1 ) {
-            push @results,
-              info(
-                NAMESERVERS_IPV4_WITH_UNIQ_AS => {
-                    asn => minstr( keys %{ $asns{$IP_VERSION_4} } ),
-                }
-              );
-        }
-        if ( scalar keys %{ $asns{$IP_VERSION_6} } == 1 ) {
-            push @results,
-              info(
-                NAMESERVERS_IPV6_WITH_UNIQ_AS => {
-                    asn => minstr( keys %{ $asns{$IP_VERSION_6} } ),
-                }
-              );
-        }
-    }
-
-    return @results;
-} ## end sub connectivity04
 
 1;
 
@@ -414,6 +254,10 @@ Runs the default set of tests and returns a list of log entries made by the test
 Returns a reference to a hash, the keys of which are the names of all test methods in the module, and the corresponding values are references to
 lists with all the tags that the method can use in log entries.
 
+=item translation()
+
+Returns a refernce to a hash with translation data. Used by the builtin translation system.
+
 =item version()
 
 Returns a version string for the module.
@@ -433,10 +277,6 @@ Verify nameservers UDP port 53 reachability.
 Verify nameservers TCP port 53 reachability.
 
 =item connectivity03($zone)
-
-Verify that nameservers addresses are not part of a bogon prefix.
-
-=item connectivity04($zone)
 
 Verify that all nameservers do not belong to the same AS.
 

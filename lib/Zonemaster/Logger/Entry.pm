@@ -19,13 +19,9 @@ our %numeric = (
     CRITICAL => 5,
 );
 
-our $start_time;
+our $start_time = time();
 
-my $json = JSON::XS->new->allow_blessed->convert_blessed;
-
-INIT {
-    $start_time = time();
-}
+my $json = JSON::XS->new->allow_blessed->convert_blessed->canonical;
 
 has 'module'    => ( is => 'ro', isa => 'Str',                lazy_build => 1 );
 has 'tag'       => ( is => 'ro', isa => 'Str',                required   => 1 );
@@ -43,7 +39,7 @@ sub _build_trace {
     #        0          1      2            3         4           5          6            7       8         9         10
     # $package, $filename, $line, $subroutine, $hasargs, $wantarray, $evaltext, $is_require, $hints, $bitmask, $hinthash
     while ( my @line = caller( $i++ ) ) {
-        next unless $line[3] =~ /^Zonemaster/;
+        next unless index($line[3], 'Zonemaster') == 0;
         push @trace, [ @line[ 0, 3 ] ];
     }
 
@@ -107,6 +103,18 @@ sub string {
     return sprintf( '%s:%s %s', $self->module, $self->tag, $argstr );
 }
 
+
+###
+### Class method
+###
+
+sub start_time_now {
+    $start_time = time();
+}
+
+no Moose;
+__PACKAGE__->meta->make_immutable;
+
 1;
 
 =head1 NAME
@@ -169,6 +177,16 @@ Simple method to generate a string representation of the log entry. Overloaded t
 =item numeric_level
 
 Returns the log level of the entry in numeric form.
+
+=back
+
+=head1 CLASS METHOD
+
+=over
+
+=item start_time_now()
+
+Set the logger's start time to the current time.
 
 =back
 

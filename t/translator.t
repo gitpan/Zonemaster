@@ -1,28 +1,14 @@
 use Test::More;
+use Test::Fatal;
 
 use Zonemaster::Logger::Entry;
+use POSIX qw[setlocale :locale_h];
 
 BEGIN { use_ok( 'Zonemaster::Translator' ) }
 
-my $trans = new_ok( 'Zonemaster::Translator' => [ { lang => 'sv' } ] );
-
-eval { Zonemaster::Translator->new; };
-like( $@, qr/Must have at least one of lang and file/, 'expected error message' );
-
-is( $trans->lang, 'sv', 'expected language code' );
-
-eval { $trans->file };
-like(
-    $@,
-    qr[Cannot read translation file .+/lib/auto/share/dist/Zonemaster/language_sv.json],
-    'expected error message'
-);
-
-$trans = Zonemaster::Translator->new( { lang => 'tech' } );
-eval { $trans->data };
-ok( !$@, 'no error reading translation data' );
-
-ok( exists $trans->data->{BASIC}{NO_GLUE}, 'expected key exists' );
+my $trans = new_ok( 'Zonemaster::Translator' => [ { locale => 'C' } ] );
+ok( exists $trans->data->{BASIC}{NO_GLUE},       'expected key from file exists' );
+ok( exists $trans->data->{DNSSEC}{ALGORITHM_OK}, 'expected key from module exists' );
 
 my $entry = Zonemaster::Logger::Entry->new(
     {
@@ -31,10 +17,19 @@ my $entry = Zonemaster::Logger::Entry->new(
         args   => { parent => 'se', rcode => 'SERVFAIL' }
     }
 );
-is(
+
+like(
     $trans->to_string( $entry ),
-    '   0.00 CRITICAL  Nameservers for "se" provided no NS records for tested zone. RCODE given was SERVFAIL.',
+    qr'   0.\d\d CRITICAL  Nameservers for "se" provided no NS records for tested zone. RCODE given was SERVFAIL.',
     'string to_stringd as expected'
 );
+
+my $untranslated = Zonemaster::Logger::Entry->new({
+    module => 'SYSTEM',
+    tag => 'QUERY',
+    args => { some => 'data'}
+});
+
+ok($trans->translate_tag($untranslated), 'Untranslated tag gets output');
 
 done_testing;
