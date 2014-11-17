@@ -1,4 +1,4 @@
-package Zonemaster::Recursor v0.0.2;
+package Zonemaster::Recursor v0.1.0;
 
 use 5.14.2;
 use Moose;
@@ -98,6 +98,8 @@ sub _recurse {
 
         if ( $p->is_redirect ) {
             my $zname = name(lc(( $p->get_records( 'ns' ) )[0]->name));
+
+            next if $zname eq '.'; # Redirect to root is never right.
 
             next if $state->{seen}{$zname};    # We followed this redirect before
 

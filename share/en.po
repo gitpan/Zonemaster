@@ -13,14 +13,6 @@ msgstr ""
 msgid  "Reverse DNS entry exist for all Nameserver IP addresses."
 msgstr "Reverse DNS entry exist for all Nameserver IP addresses."
 
-#: ADDRESS:NAMESERVER_IPV6_ADDRESSES_NOT_BOGON
-msgid  "None of the {nb} nameserver(s) with IPv6 addresses is part of a bogon prefix."
-msgstr "None of the {nb} nameserver(s) with IPv6 addresses is part of a bogon prefix."
-
-#: ADDRESS:NAMESERVER_IPV6_ADDRESS_BOGON
-msgid  "Nameserver {ns} IPv6 address {address} is part of a bogon prefix."
-msgstr "Nameserver {ns} IPv6 address {address} is part of a bogon prefix."
-
 #: ADDRESS:NAMESERVER_IP_PRIVATE_NETWORK
 msgid  "Nameserver {ns} has an IP address ({address}) with prefix {prefix} referenced in {reference} as a '{name}'."
 msgstr "Nameserver {ns} has an IP address ({address}) with prefix {prefix} referenced in {reference} as a '{name}'."
@@ -443,10 +435,6 @@ msgstr "The zone has NSEC records."
 msgid  "The zone has NSEC3 records."
 msgstr "The zone has NSEC3 records."
 
-#: DNSSEC:INVALID_NAME_FOUND
-msgid  "When asked for the name {name}, which must not exist, the response was not an error."
-msgstr "When asked for the name {name}, which must not exist, the response was not an error."
-
 #: DNSSEC:INVALID_NAME_RCODE
 msgid  "When asked for the name {name}, which must not exist, the response had RCODE {rcode}."
 msgstr "When asked for the name {name}, which must not exist, the response had RCODE {rcode}."
@@ -741,6 +729,10 @@ msgstr "Configuration was read from {name}."
 msgid  "Using prerequisite module {name} version {version}."
 msgstr "Using prerequisite module {name} version {version}."
 
+#: SYSTEM:GLOBAL_VERSION
+msgid "Using version {version} of the Zonemaster engine."
+msgstr "Using version {version} of the Zonemaster engine."
+
 #: SYSTEM:FAKE_DELEGATION
 msgid  "Followed a fake delegation."
 msgstr "Followed a fake delegation."
@@ -764,6 +756,10 @@ msgstr "Fatal error in {module}: {msg}"
 #: SYSTEM:MODULE_VERSION
 msgid  "Using module {module} version {version}."
 msgstr "Using module {module} version {version}."
+
+#: SYSTEM:MODULE_END
+msgid  "Module {module} finished running."
+msgstr "Module {module} finished running."
 
 #: SYSTEM:NO_NETWORK
 msgid  "Both IPv4 and IPv6 are disabled."

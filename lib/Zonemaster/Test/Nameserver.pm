@@ -1,4 +1,4 @@
-package Zonemaster::Test::Nameserver v0.0.3;
+package Zonemaster::Test::Nameserver v0.1.0;
 
 use 5.14.2;
 use strict;
@@ -271,7 +271,7 @@ sub nameserver04 {
 
         my $p = $local_ns->query( $zone->name, q{SOA} );
         if ( $p ) {
-            if ( $local_ns->address->short ne $p->answerfrom ) {
+            if ( $p->answerfrom and ($local_ns->address->short ne Net::IP::XS->new($p->answerfrom)->short ) ) {
                 push @results,
                   info(
                     DIFFERENT_SOURCE_IP => {

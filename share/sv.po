@@ -9,14 +9,6 @@ msgstr ""
 "Language-Team: Zonemaster Team\n"
 "MIME-Version: 1.0\n"
 
-#: ADDRESS:NAMESERVER_IPV6_ADDRESSES_NOT_BOGON
-msgid  "None of the {nb} nameserver(s) with IPv6 addresses is part of a bogon prefix."
-msgstr "Ingen av de {nb} namnservrarna med IPv6-addresser är en del av ett bogon-prefix."
-
-#: ADDRESS:NAMESERVER_IPV6_ADDRESS_BOGON
-msgid  "Nameserver {ns} IPv6 address {address} is part of a bogon prefix."
-msgstr "En IPv6-address för namnservern {ns} ({address}) ingår i ett bogon-prefix."
-
 #: ADDRESS:NAMESERVER_IP_PRIVATE_NETWORK
 msgid  "Nameserver {ns} has an IP address ({address}) with prefix {prefix} referenced in {reference} as a '{name}'."
 msgstr "Namnservern {ns} har en IP-adress ({address}) med prefixet {prefix}, som {reference} klassificerar som '{name}'."
@@ -305,10 +297,6 @@ msgstr "Zonen har NSEC-poster."
 msgid  "The zone has NSEC3 records."
 msgstr "Zonen har NSEC3-poster."
 
-#: DNSSEC:INVALID_NAME_FOUND
-msgid  "When asked for the name {name}, which must not exist, the response was not an error."
-msgstr "Svaret på en fråga om namnet {name}, som inte får existera, var inte ett felmeddelande."
-
 #: DNSSEC:INVALID_NAME_RCODE
 msgid  "When asked for the name {name}, which must not exist, the response had RCODE {rcode}."
 msgstr "Svaret på en fråga om namnet {name}, som inte får existera, hade RCODE {rcode}."
@@ -505,6 +493,10 @@ msgstr "Konfiguration lästes från {name}."
 msgid  "Using prerequisite module {name} version {version}."
 msgstr "Använder version {version} av modulen {name}."
 
+#: SYSTEM:GLOBAL_VERSION
+msgid "Using version {version} of the Zonemaster engine."
+msgstr "Använder version {version} av Zonemasters testmotor."
+
 #: SYSTEM:LOGGER_CALLBACK_ERROR
 msgid  "Logger callback died with error: {exception}"
 msgstr "Callback-funktionen för log-modulen dog med felmeddelandet: {exception}"
@@ -520,6 +512,10 @@ msgstr "Fatalt fel i {module}: {msg}"
 #: SYSTEM:MODULE_VERSION
 msgid  "Using module {module} version {version}."
 msgstr "Använder version {version} av modulen {module}."
+
+#: SYSTEM:MODULE_END
+msgid  "Module {module} finished running."
+msgstr "Modulen {module} avslutades."
 
 #:SYSTEM:NO_NETWORK
 msgid "Both IPv4 and IPv6 are disabled."

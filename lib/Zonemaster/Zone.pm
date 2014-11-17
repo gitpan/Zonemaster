@@ -1,4 +1,4 @@
-package Zonemaster::Zone v0.0.4;
+package Zonemaster::Zone v0.1.0;
 
 use 5.14.2;
 use strict;
@@ -127,6 +127,8 @@ sub query_one {
 
         my $p = $ns->query( $name, $type, $flags );
         return $p if defined( $p );
+    }
+    continue {
         $i += 1;
     }
 
@@ -173,6 +175,8 @@ sub query_auth {
         if ($p and $p->aa) {
             return $p
         }
+    }
+    continue {
         $i += 1;
     }
 
@@ -199,6 +203,8 @@ sub query_persistent {
         if ($p and scalar($p->get_records_for_name($type, $name)) > 0) {
             return $p
         }
+    }
+    continue {
         $i += 1;
     }
 
@@ -216,7 +222,7 @@ sub is_in_zone {
         return 0;    # Zone name cannot be a suffix of tested name
     }
 
-    my $p = $self->query_one( "$name", 'SOA' );
+    my $p = $self->query_auth( "$name", 'SOA' );
     if (not $p) {
         return;
     }
@@ -226,6 +232,11 @@ sub is_in_zone {
     }
 
     my ( $soa ) = $p->get_records( 'SOA' );
+
+    if (not $soa) {
+        return 0;    # Auth server is broken, call it a "no".
+    }
+
     if ( Zonemaster::DNSName->new($soa->name) eq $self->name ) {
         return 1;
     }
