@@ -1,4 +1,4 @@
-package Zonemaster::Test::Zone v0.1.0;
+package Zonemaster::Test::Zone v1.0.0;
 
 use 5.14.2;
 use strict;
@@ -459,7 +459,7 @@ sub zone07 {
                         }
                       );
                 }
-            }
+            } ## end if ( $p_mname )
         } ## end foreach my $address_type ( ...)
         if ( not $addresses_nb ) {
             push @results,

@@ -1,4 +1,4 @@
-package Zonemaster::Nameserver::Cache v0.1.0;
+package Zonemaster::Nameserver::Cache v1.0.0;
 
 use 5.14.2;
 use warnings;
@@ -26,7 +26,7 @@ around 'new' => sub {
 };
 
 no Moose;
-__PACKAGE__->meta->make_immutable(inline_constructor => 0);
+__PACKAGE__->meta->make_immutable( inline_constructor => 0 );
 
 1;
 

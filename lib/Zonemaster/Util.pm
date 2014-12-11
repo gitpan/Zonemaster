@@ -1,4 +1,4 @@
-package Zonemaster::Util v0.1.0;
+package Zonemaster::Util v1.0.0;
 
 use 5.14.2;
 use parent 'Exporter';
@@ -9,9 +9,9 @@ use Zonemaster::DNSName;
 use Pod::Simple::SimpleTree;
 
 ## no critic (Modules::ProhibitAutomaticExportation)
-our @EXPORT = qw[ ns info name pod_extract_for ];
-our @EXPORT_OK = qw[ ns info name pod_extract_for policy ];
-our %EXPORT_TAGS = ( all => \@EXPORT_OK);
+our @EXPORT      = qw[ ns info name pod_extract_for ];
+our @EXPORT_OK   = qw[ ns info name pod_extract_for policy ];
+our %EXPORT_TAGS = ( all => \@EXPORT_OK );
 
 ## no critic (Subroutines::RequireArgUnpacking)
 sub ns {
